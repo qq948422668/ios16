@@ -78,7 +78,8 @@ enum SemVer {
 /// 强更判定：当前版本 < min_version → required；否则 latest > 当前 → available。
 @MainActor
 final class UpdateChecker: ObservableObject {
-    @Published private(set) var announcement: UpdateAnnouncement?
+    /// 更新提示。公开 setter 是有意的：`.alert(item:)` 关闭时需要回写 nil 来消除弹窗。
+    @Published var announcement: UpdateAnnouncement?
 
     private let manifestURL: URL?
     private let session: URLSession
