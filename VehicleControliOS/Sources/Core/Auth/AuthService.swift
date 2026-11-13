@@ -119,6 +119,7 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
         let envelope = try Self.decode(LeapEnvelope<AppLoginPayload>.self, from: data)
         guard envelope.isSuccess else {
             Self.logBusinessFailure(.signIn, envelope: envelope, body: data)
+            Self.logLoginRequestFields(params)
             throw LeapAuthError.business(
                 stage: .signIn,
                 code: envelope.code ?? envelope.result ?? -1,
@@ -368,6 +369,26 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
     ) {
         Logger(subsystem: "com.vehiclecontrol.app", category: "auth")
             .error("业务失败 [\(stage.rawValue, privacy: .public)] code=\(envelope.code.map(String.init) ?? "nil", privacy: .public) result=\(envelope.result.map(String.init) ?? "nil", privacy: .public) message=\(envelope.message ?? "nil", privacy: .public) body=\(String(data: body.prefix(200), encoding: .utf8) ?? "non-utf8", privacy: .public)")
+    }
+
+    /// 登录请求现场（脱敏）：记录各字段名、长度与掩码采样，
+    /// 用于真机排查风控类拒绝码（如 100132）时核对请求构造。
+    private static func logLoginRequestFields(_ params: [String: String]) {
+        let masked: [String] = params.keys.sorted().map { key in
+            let value = params[key] ?? ""
+            let sample: String
+            switch key {
+            case "phoneNoCiphertext", "smsCode", "signStr":
+                sample = value.count > 8
+                    ? "\(value.prefix(4))***\(value.suffix(2)) len=\(value.count)"
+                    : "*** len=\(value.count)"
+            default:
+                sample = value.isEmpty ? "<empty>" : String(value.prefix(40))
+            }
+            return "\(key)=\(sample)"
+        }
+        Logger(subsystem: "com.vehiclecontrol.app", category: "auth")
+            .error("登录请求字段 \(masked.joined(separator: " "), privacy: .public)")
     }
 
     private static func validateHTTP(_ response: URLResponse, data: Data) throws {

@@ -18,7 +18,8 @@ struct LeapConfiguration: Sendable {
     static let official = LeapConfiguration(
         appUserHost: URL(string: "https://appuser.leapmotor.cn")!,
         gatewayHost: URL(string: "https://app-gw-global-master.leapmotor.com")!,
-        clientVersion: "1.5.50",
+        // 与现役官方 APK（versionName=4.5.15）一致；历史抓包值 1.5.50 已过旧。
+        clientVersion: "4.5.15",
         channel: "1",
         // 文档 §3 固定签名头：deviceType=android（官方抓包均为 Android 端）。
         deviceType: "android"
@@ -28,7 +29,7 @@ struct LeapConfiguration: Sendable {
         LeapConfiguration(
             appUserHost: baseURL,
             gatewayHost: baseURL,
-            clientVersion: "1.5.50",
+            clientVersion: "4.5.15",
             channel: "1",
             deviceType: "android"
         )

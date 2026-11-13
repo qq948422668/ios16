@@ -121,9 +121,10 @@ enum LeapAuthError: LocalizedError {
         case 39:
             return "登录凭证已过期，请重新登录。"
         case 100132:
-            // 服务端未在客户端枚举的码；实测为登录校验被风控/平台参数不符拒绝
-            // （os 必须为固定值 android，APPPlatform 固定 Android）。
-            return "\(stage.failurePrefix)校验未通过（100132）：请稍后重试；若持续出现请先用官方 App 登录一次再试。"
+            // 服务端未在客户端枚举的码；实测为登录校验被风控拒绝。
+            // 已对齐：os=android/APPPlatform=Android/deviceType=android/version=4.5.15。
+            // 剩余可疑差异：smDeviceId（数美指纹）与极验条件参数，均依赖官方 Android SDK。
+            return "\(stage.failurePrefix)校验未通过（100132）：服务端设备风控拒绝了本次登录。若手机装有官方 App，请先用官方 App 登录一次后再试；仍失败则需人工核验设备风控。"
         default:
             // 服务端 message 原文不进用户提示（可能是“操作成功”这类
             // 与失败语境矛盾的文案），只保留业务码；原文由调用方写日志。
