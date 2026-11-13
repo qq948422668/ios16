@@ -46,7 +46,7 @@ SDK_TYPES = {
     "NavigationLink", "NavigationStack", "ObservableObject", "ProgressView", "Published",
     "RoundedRectangle", "ScrollView", "Spacer", "State", "StateObject", "SwiftUI", "Text",
     "ToolbarItem", "VStack", "View", "ViewBuilder", "Visibility", "LocalizedStringKey",
-    "Spacer", "EmptyView", "ZStack",
+    "Spacer", "EmptyView", "ZStack", "Alert", "Identifiable",
     # UIKit
     "UIKit", "UIApplication", "UIApplicationDelegate", "UIWindow", "UIWindowScene",
     "UIScreen", "UIResponder", "UIViewController",
@@ -303,6 +303,75 @@ def check_build_config() -> list[str]:
     return problems
 
 
+def check_version_consistency() -> list[str]:
+    """VERSION 文件是唯一真相源：project.yml 两处字面值必须与它一致。"""
+    problems: list[str] = []
+    version_file = ROOT / "VERSION"
+    if not version_file.exists():
+        return ["VERSION 文件不存在（语义化版本的唯一真相源）"]
+    version = version_file.read_text(encoding="utf-8").strip()
+    if not re.match(r"^\d+\.\d+\.\d+$", version):
+        problems.append(f"VERSION 内容 '{version}' 不符合 MAJOR.MINOR.PATCH 格式")
+
+    yml = (ROOT / "project.yml").read_text(encoding="utf-8")
+    for key in ("CFBundleShortVersionString", "MARKETING_VERSION"):
+        match = re.search(rf'{key}:\s*"(\d+\.\d+\.\d+)"', yml)
+        if not match:
+            problems.append(f"project.yml 缺少 {key} 字面值（bump_version.py 负责同步）")
+        elif match.group(1) != version:
+            problems.append(
+                f"project.yml {key}={match.group(1)} 与 VERSION={version} 不一致"
+            )
+    return problems
+
+
+def check_app_icon() -> list[str]:
+    """AppIcon 必须就位：1024×1024、PNG、无 alpha（iOS 硬性要求），且工程已声明。"""
+    problems: list[str] = []
+    icon = ROOT / "Sources" / "Assets.xcassets" / "AppIcon.appiconset" / "AppIcon.png"
+    if not icon.exists():
+        return ["缺少 AppIcon.appiconset/AppIcon.png（桌面图标不会显示）"]
+
+    data = icon.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        problems.append("AppIcon.png 不是 PNG 格式")
+    else:
+        import struct
+
+        width, height = struct.unpack(">II", data[16:24])
+        color_type = data[25]
+        if (width, height) != (1024, 1024):
+            problems.append(f"AppIcon.png 尺寸 {width}x{height}，iOS 单尺寸图标要求 1024x1024")
+        if color_type in (4, 6):
+            problems.append("AppIcon.png 含 alpha 通道，iOS 图标不允许透明像素")
+
+    contents = icon.parent / "Contents.json"
+    if not contents.exists() or "AppIcon.png" not in contents.read_text(encoding="utf-8"):
+        problems.append("AppIcon.appiconset/Contents.json 未引用 AppIcon.png")
+
+    yml = (ROOT / "project.yml").read_text(encoding="utf-8")
+    if "ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon" not in yml:
+        problems.append("project.yml 未设置 ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon")
+    return problems
+
+
+def check_ota_wiring() -> list[str]:
+    """OTA 链路存在性：更新服务与环境清单地址必须就位。"""
+    problems: list[str] = []
+    service = SOURCES / "Services" / "UpdateService.swift"
+    if not service.exists():
+        return ["缺少 Sources/Services/UpdateService.swift（OTA 更新检查）"]
+    service_text = service.read_text(encoding="utf-8")
+    for needed in ("latest_version", "min_version", "SemVer", "UpdateChecker"):
+        if needed not in service_text:
+            problems.append(f"UpdateService.swift 缺少关键元素：{needed}")
+
+    env = (SOURCES / "Core" / "Config" / "AppEnvironment.swift").read_text(encoding="utf-8")
+    if "otaManifestURL" not in env:
+        problems.append("AppEnvironment 缺少 otaManifestURL（应用不知道去哪拉更新清单）")
+    return problems
+
+
 def main() -> int:
     files: dict[Path, str] = {}
     for path in swift_files():
@@ -322,6 +391,9 @@ def main() -> int:
     problems += check_protocol_conformance(files, declared)
     problems += check_type_references(files, declared)
     problems += check_build_config()
+    problems += check_version_consistency()
+    problems += check_app_icon()
+    problems += check_ota_wiring()
 
     print(f"扫描 {len(files)} 个 Swift 文件，声明 {len(declared)} 个类型")
 

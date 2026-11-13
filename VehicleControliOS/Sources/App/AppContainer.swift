@@ -13,6 +13,7 @@ final class AppContainer: ObservableObject {
     let receiptResolver: any CommandReceiptResolving
     let snapshotCache: SnapshotCache
     let backgroundRefresher: BackgroundRefresher
+    let updateChecker: UpdateChecker
 
     private let client: APIClient
     private var didBootstrap = false
@@ -38,6 +39,7 @@ final class AppContainer: ObservableObject {
         )
         self.snapshotCache = cache
         self.backgroundRefresher = BackgroundRefresher(service: service, cache: cache)
+        self.updateChecker = UpdateChecker(manifestURL: environment.otaManifestURL)
 
         // 推送可用时回执走“推送优先 + 轮询兜底”，否则纯轮询。
         if environment.pushEnabled {

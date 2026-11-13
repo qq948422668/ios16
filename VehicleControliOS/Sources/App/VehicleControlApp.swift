@@ -11,6 +11,7 @@ struct VehicleControlApp: App {
             RootView()
                 .environmentObject(container)
                 .environmentObject(container.session)
+                .environmentObject(container.updateChecker)
                 .task { container.bootstrap() }
         }
     }

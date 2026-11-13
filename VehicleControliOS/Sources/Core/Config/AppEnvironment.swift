@@ -24,6 +24,9 @@ struct AppEnvironment: Sendable {
     /// 是否启用 APNs 推送回执。为 false 时指令回执全程走轮询，
     /// 无需申请 Push Notifications capability，便于模拟器联调。
     let pushEnabled: Bool
+    /// OTA 更新清单地址；nil 表示禁用更新检查。
+    /// CI 每次成功构建后把 manifest 写入仓库 `.github/ota/manifest.json`。
+    let otaManifestURL: URL?
 
     static let production = AppEnvironment(
         name: "production",
@@ -37,7 +40,9 @@ struct AppEnvironment: Sendable {
             scopes: ["vehicle.read", "vehicle.control"]
         ),
         pollingInterval: 3,
-        pushEnabled: false
+        pushEnabled: false,
+        otaManifestURL: URL(
+            string: "https://raw.githubusercontent.com/qq948422668/ios16/main/.github/ota/manifest.json")!
     )
 
     /// 指向本地 Mock 服务（Tools/mock-server）。stream 端点按 http→ws 自动推导。
@@ -59,7 +64,10 @@ struct AppEnvironment: Sendable {
                 scopes: ["vehicle.read", "vehicle.control"]
             ),
             pollingInterval: 2,
-            pushEnabled: false
+            pushEnabled: false,
+            otaManifestURL: baseURL.host.map { host in
+                URL(string: "http://\(host):8000/ota/manifest.json")
+            }
         )
     }
 

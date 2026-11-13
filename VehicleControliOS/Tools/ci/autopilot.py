@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]          # VehicleControliOS/
@@ -401,8 +402,11 @@ def step_publish() -> int:
         if network_broken:
             emit("push", "INFO", "git 通道被网络策略阻断，自动降级到 Git Data API 路径")
             return _publish_via_api(slug, branch)
-        if "already exists" in out or "non-fast-forward" in out:
-            emit("push", "FAIL", "远端已有历史，拒绝强推。请用空仓库，或手动处理后再跑")
+        if "already exists" in out or "non-fast-forward" in out or "fetch first" in lowered:
+            # 远端有本地没有的提交（例如此前经 API 路径写入的 OTA 清单），
+            # 不强推：改走 Git Data API，以远端最新提交为父提交做增量。
+            emit("push", "INFO", "远端领先于本地 git 历史，改走 API 增量提交（不强推）")
+            return _publish_via_api(slug, branch)
         else:
             emit("push", "FAIL", out.strip()[:400])
         return 2
@@ -426,12 +430,19 @@ def _wait_for_run(slug: str, branch: str, since: float) -> tuple[int, str, str]:
                              % (slug, urllib.parse.quote(branch)))
             if code == 200:
                 for item in json.loads(body).get("workflow_runs", []):
+                    # 只认 dispatch 之后创建的运行，避免抓到上一轮的旧实例。
                     created = item.get("created_at", "")
-                    if item.get("name", "").startswith("iOS") or True:
-                        run_id = item["id"]
-                        url = item.get("html_url", "")
-                        emit("run", "OK", "#%s 已排队" % run_id)
-                        break
+                    try:
+                        created_epoch = datetime.fromisoformat(
+                            created.replace("Z", "+00:00")).timestamp()
+                    except ValueError:
+                        continue
+                    if created_epoch + 5 < since:
+                        continue
+                    run_id = item["id"]
+                    url = item.get("html_url", "")
+                    emit("run", "OK", "#%s 已排队（%s）" % (run_id, item.get("run_number", "?")))
+                    break
             if run_id is None:
                 elapsed = int(time.time() - since)
                 emit("run", "WAIT", "等待运行实例… %ss" % elapsed)
@@ -549,6 +560,48 @@ def _report_artifacts(slug: str, run_id: int) -> None:
     for item in items:
         emit("artifacts", "OK", "%s  %.1f MB" % (item["name"],
                                                  item["size_in_bytes"] / 1024 / 1024))
+
+
+def _publish_ota_manifest(slug: str, run_id: int, run_url: str) -> None:
+    """构建成功后把 OTA 清单写入仓库 `.github/ota/manifest.json`。
+
+    应用内 UpdateChecker 启动时拉取该清单做版本比较；
+    提交信息带 [skip ci]，避免清单提交本身再触发一轮构建。
+    """
+    version_file = ROOT / "VERSION"
+    if not version_file.exists():
+        emit("ota", "INFO", "无 VERSION 文件，跳过 OTA 清单发布")
+        return
+    version = version_file.read_text(encoding="utf-8").strip()
+
+    code, body = api("/repos/%s/actions/runs/%s" % (slug, run_id))
+    run_number = json.loads(body).get("run_number") if code == 200 else None
+
+    manifest = {
+        "latest_version": version,
+        "min_version": version,
+        "build": run_number,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "notes": "",
+        "ipa_url": run_url,
+        # 未签名包无法 itms-services 空中安装；签名后把 plist 地址填到这里。
+        "manifest_plist_url": None,
+    }
+    content = base64.b64encode(
+        json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")).decode()
+
+    path = ".github/ota/manifest.json"
+    detail, payload = api("/repos/%s/contents/%s" % (slug, path))
+    put: dict = {"message": "chore(ota): publish v%s (build %s) [skip ci]" % (version, run_number),
+                 "content": content}
+    if detail == 200:
+        put["sha"] = json.loads(payload).get("sha")
+    code, body = api("/repos/%s/contents/%s" % (slug, path), "PUT", put)
+    if code in (200, 201):
+        emit("ota", "OK", "清单已发布 v%s (build %s) → %s" % (version, run_number, path))
+    else:
+        emit("ota", "FAIL", "清单发布失败 HTTP %s：%s" % (
+            code, body.decode("utf-8", "replace")[:200]))
 
 
 # ----------------------------------------------------------------------------
@@ -726,6 +779,7 @@ def _dispatch_and_watch(slug: str, branch: str) -> int:
     if conclusion == "success":
         emit("result", "OK", "lint + build 全部通过")
         _report_artifacts(slug, run_id)
+        _publish_ota_manifest(slug, run_id, url)
         return 0
 
     emit("result", "FAIL", "结论：%s" % conclusion)
@@ -754,6 +808,39 @@ def _apply_cli_overrides(argv: list[str]) -> None:
             print("提醒：令牌经命令行传入会留在 shell 历史，用完请清理历史并 revoke。")
 
 
+def _apply_version_bump(argv: list[str]) -> None:
+    """--bump patch|minor|major|set=X.Y.Z：发布前递增版本（默认不递增）。
+
+    只在执行模式生效；递增发生在门禁之前，保证随本次提交一起上传。
+    """
+    if "--bump" not in argv:
+        return
+    index = argv.index("--bump")
+    if index + 1 >= len(argv):
+        emit("bump", "FAIL", "--bump 需要参数：patch|minor|major|set=X.Y.Z")
+        raise SystemExit(2)
+    mode = argv[index + 1].strip()
+    script = ROOT / "Tools/ci/bump_version.py"
+    args = [sys.executable, "-X", "utf8", str(script)]
+    if mode == "patch":
+        args.append("--patch")
+    elif mode == "minor":
+        args.append("--minor")
+    elif mode == "major":
+        args.append("--major")
+    elif mode.startswith("set="):
+        args += ["--set", mode[4:]]
+    else:
+        emit("bump", "FAIL", "未知模式 %r（可选 patch|minor|major|set=X.Y.Z）" % mode)
+        raise SystemExit(2)
+    code, out = run(args, cwd=ROOT, timeout=30)
+    print(out.strip())
+    if code != 0:
+        emit("bump", "FAIL", "版本递增失败")
+        raise SystemExit(2)
+    emit("bump", "OK", "版本已更新，将随本次构建发布")
+
+
 def main() -> int:
     _apply_cli_overrides(sys.argv)
     check_only = "--check-only" in sys.argv
@@ -761,6 +848,9 @@ def main() -> int:
     mode = "计划（只读，列出待上传文件）" if plan_only else ("体检（只读）" if check_only else "执行")
     print("Autopilot  |  仓库根 %s" % REPO_ROOT)
     print("模式：%s" % mode)
+
+    if not (check_only or plan_only):
+        _apply_version_bump(sys.argv)
 
     env_ok = step_environment(check_only or plan_only)
     if not env_ok and not plan_only:

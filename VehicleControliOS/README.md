@@ -370,6 +370,47 @@ lint（ubuntu，约 40 秒）            build（macos-15，约 6–8 分钟）
 
 `build` 依赖 `lint`：便宜的机器先跑，错了不浪费 Mac 分钟。
 
+### 版本管理（语义化版本 + 自动构建号）
+
+- **命名规则**：`MAJOR.MINOR.PATCH`（语义化版本）。主版本 +1 = 破坏性变更；
+  次版本 +1 = 新功能；修订号 +1 = 缺陷修复。发布历史版本对照用语义化做变更溯源于一目了然。
+- **唯一真相源**：`VehicleControliOS/VERSION`。`Tools/ci/bump_version.py` 负责递增
+  并同步 `project.yml` 的 `CFBundleShortVersionString` / `MARKETING_VERSION`；
+  静态检查器强制三方一致，漂移会在 40 秒的 lint job 被拦下。
+- **构建号**：`CURRENT_PROJECT_VERSION = CI run number`，每次构建严格递增，无需人工管理。
+- **发布时递增**：`python Tools/ci/autopilot.py --bump patch`（或 `--minor` / `--major` /
+  `--set=1.2.3`），递增发生在门禁之前，随本次提交一起发布。日常修复跑 `patch`。
+
+### OTA 更新机制
+
+**触发条件**（应用内 `UpdateChecker`）：
+
+- 每次冷启动检查一次（`RootView.task`），结果缓存，进程内不重复请求；
+- 清单不可达/解析失败静默跳过——离线可用优先，更新检查永不阻塞启动；
+- `latest_version > 当前版本` → 提示更新（可忽略）；`当前版本 < min_version` → 强制更新弹窗。
+
+**分发渠道**（当前为未签名包阶段的现实约束）：
+
+| 渠道 | 适用 | 说明 |
+|---|---|---|
+| 仓库 manifest + 手动重签 | **当前** | CI 成功后 autopilot 自动把 `.github/ota/manifest.json` 写入仓库
+（含 `latest_version` / `min_version` / `build` / `ipa_url`），应用启动比对；用户从 `ipa_url`
+下载 IPA 后用 Sideloadly/AltStore 重签安装 |
+| itms-services 空中安装 | 配置签名 secrets 后 | Ad Hoc/企业签名包挂 HTTPS `manifest.plist`，
+手机点链接直接安装；把 plist 地址填进 manifest 的 `manifest_plist_url` 即可启用 |
+| TestFlight | 有付费账号后 | 上传 App Store Connect，推送走苹果通道，本机制仍可作为灰度对照 |
+
+注意：`[skip ci]` 已加在清单提交信息上，清单回写不会触发新一轮构建。
+
+### 应用图标
+
+- **素材**：`Sources/Assets.xcassets/AppIcon.appiconset/AppIcon.png`，汽车图形（白色车身 +
+  深蓝底），AI 生成后人工校验。
+- **规格要求**（iOS 单尺寸图标，全部有静态检查兜底）：1024×1024 像素、PNG、8-bit、
+  **无 alpha 通道**、方形无预裁圆角（系统自动裁切）、sRGB、无文字压边。
+- **接线**：`project.yml` 的 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`；actool 打包时
+  自动生成 `CFBundleIcons` 注入产物，Info.plist 无需手写。
+
 ### 产物说明：你会拿到什么包
 
 | 产物 | 内容 | 能否安装 |
