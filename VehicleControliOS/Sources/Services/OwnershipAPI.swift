@@ -251,7 +251,7 @@ private struct WeeklyEnergyEnvelope: Decodable {
 }
 
 /// 接口 12 响应。
-struct ParkingPhotoInfo: Sendable, Equatable {
+struct ParkingPhotoInfo: Decodable, Sendable, Equatable {
     let fileUrl: String
     let uploadedAt: Date?
 }
