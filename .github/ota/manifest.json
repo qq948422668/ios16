@@ -1,9 +1,9 @@
 {
-  "latest_version": "1.2.1",
-  "min_version": "1.2.1",
-  "build": 17,
-  "updated_at": "2026-11-13T08:20:45Z",
+  "latest_version": "1.3.0",
+  "min_version": "1.3.0",
+  "build": 20,
+  "updated_at": "2026-11-13T08:39:14Z",
   "notes": "",
-  "ipa_url": "https://github.com/qq948422668/ios16/actions/runs/43392224567",
+  "ipa_url": "https://github.com/qq948422668/ios16/actions/runs/43394509254",
   "manifest_plist_url": null
 }
