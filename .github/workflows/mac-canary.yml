@@ -1,0 +1,10 @@
+name: mac-canary
+on:
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: macos-14
+    timeout-minutes: 5
+    steps:
+      - name: echo
+        run: echo ok
