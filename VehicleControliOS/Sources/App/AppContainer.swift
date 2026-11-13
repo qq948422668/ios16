@@ -50,13 +50,14 @@ final class AppContainer: ObservableObject {
         }
     }
 
-    /// 启动期一次性装配：注册后台任务、按需开启推送链路。
-    /// 必须在 didFinishLaunching 结束前调用（由 RootView 的 .task 触发）。
+    /// 启动期一次性装配：挂入后台刷新实例、按需开启推送链路。
+    /// BGTask 的 launch handler 已由 AppDelegate 在启动完成前注册，
+    /// 这里只负责把业务实例挂入并提交首次调度。
     func bootstrap() {
         guard !didBootstrap else { return }
         didBootstrap = true
 
-        backgroundRefresher.register()
+        backgroundRefresher.start()
 
         guard environment.pushEnabled else { return }
 

@@ -394,6 +394,13 @@ def step_publish() -> int:
     emit("push", "WAIT", "推送到 %s (%s)" % (slug, branch))
     code, out = git("push", push_url, "HEAD:refs/heads/%s" % branch, timeout=600)
     if code != 0:
+        lowered = out.lower()
+        network_broken = any(marker in lowered for marker in (
+            "connection was reset", "could not resolve host",
+            "failed to connect", "connection timed out"))
+        if network_broken:
+            emit("push", "INFO", "git 通道被网络策略阻断，自动降级到 Git Data API 路径")
+            return _publish_via_api(slug, branch)
         if "already exists" in out or "non-fast-forward" in out:
             emit("push", "FAIL", "远端已有历史，拒绝强推。请用空仓库，或手动处理后再跑")
         else:

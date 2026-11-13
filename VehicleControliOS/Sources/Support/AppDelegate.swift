@@ -1,7 +1,8 @@
+import BackgroundTasks
 import UIKit
 import UserNotifications
 
-/// 只做三件事：设置通知代理、接收 APNs 设备令牌、把回执转交 `PushCoordinator`。
+/// 只做三件事：设置通知代理、注册 BGTask launch handler、接收 APNs 设备令牌。
 /// 这里刻意不持有业务依赖，避免 App 启动顺序与 SwiftUI 生命周期耦合。
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
@@ -10,6 +11,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         // 必须在启动完成前设置，冷启动点击通知时 didReceive 才会回调。
         UNUserNotificationCenter.current().delegate = self
+
+        // BGTask launch handler 必须在 App 完成启动之前注册：
+        // 放在这里（而非 SwiftUI .task）是签名包启动闪退的修复核心。
+        BackgroundRefresher.registerAtLaunch()
         return true
     }
 
