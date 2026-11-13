@@ -65,7 +65,10 @@ struct PushPayload: Sendable {
     let failureReason: String?
 
     init?(userInfo: [AnyHashable: Any]) {
-        let dictionary = (userInfo["cmd_result"] as? [String: Any]) ?? userInfo
+        // aps 的 userInfo 是 [AnyHashable: Any]，需条件转换后才能用 String 下标。
+        let dictionary = (userInfo["cmd_result"] as? [String: Any])
+            ?? (userInfo as? [String: Any])
+            ?? [:]
         guard let ticketId = dictionary["ticket_id"] as? String,
               let rawStatus = dictionary["status"] as? String else {
             return nil
