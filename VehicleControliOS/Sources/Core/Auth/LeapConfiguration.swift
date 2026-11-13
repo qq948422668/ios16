@@ -20,7 +20,8 @@ struct LeapConfiguration: Sendable {
         gatewayHost: URL(string: "https://app-gw-global-master.leapmotor.com")!,
         clientVersion: "1.5.50",
         channel: "1",
-        deviceType: "ios"
+        // 文档 §3 固定签名头：deviceType=android（官方抓包均为 Android 端）。
+        deviceType: "android"
     )
 
     static func mock(baseURL: URL) -> LeapConfiguration {
@@ -29,7 +30,7 @@ struct LeapConfiguration: Sendable {
             gatewayHost: baseURL,
             clientVersion: "1.5.50",
             channel: "1",
-            deviceType: "ios"
+            deviceType: "android"
         )
     }
 }

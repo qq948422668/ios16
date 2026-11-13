@@ -263,9 +263,16 @@ def main() -> int:
                     "?phoneNoCiphertext=MOCKCIPHER&smsCode=000000&deviceID=d1&os=ios")
         check("sms login wrong code 100115", json.loads(body).get("code") == 100115, body[:80])
 
+        # 风控复刻：os 非 android 必须被拒绝（100132 触发条件回归）。
         status, _, body = request(
             "POST", "/app-user/applogin/check_login_with_phone"
                     "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=ios")
+        check("sms login os=ios rejected 100132",
+              json.loads(body).get("code") == 100132, body[:80])
+
+        status, _, body = request(
+            "POST", "/app-user/applogin/check_login_with_phone"
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=android")
         login = json.loads(body)
         legacy = (login.get("data") or {}).get("appLoginVO") or {}
         check("sms login ok", login.get("code") == 0 and bool(legacy.get("token")), body[:100])

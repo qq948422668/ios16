@@ -87,7 +87,8 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
             "smsCode": smsCode,
             "deviceID": DeviceIdentity.current(),
             "smDeviceId": DeviceIdentity.current(),
-            "os": "ios",
+            // 文档 §3 接口 2：os 固定值 "android"，服务端校验非 android 直接拒绝。
+            "os": "android",
             "pageUrl": "",
             "timespan": String(Int64(Date().timeIntervalSince1970 * 1000)),
             "nonce": String(Int.random(in: 10_000..<10_000_000))
@@ -337,8 +338,9 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
 
     private func applyLegacyHeaders(_ request: inout URLRequest) {
         let version = env.leap.clientVersion
+        // 文档 §3 接口 1：APPPlatform 固定 Android（服务端按平台校验）。
         request.setValue("okhttp/4.9.3", forHTTPHeaderField: "User-Agent")
-        request.setValue("iOS", forHTTPHeaderField: "APPPlatform")
+        request.setValue("Android", forHTTPHeaderField: "APPPlatform")
         request.setValue(version, forHTTPHeaderField: "APPVersion")
         request.setValue(DeviceIdentity.current(), forHTTPHeaderField: "APPImei")
         request.setValue("APP", forHTTPHeaderField: "C-VERSIONS")

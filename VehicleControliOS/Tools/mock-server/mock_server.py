@@ -592,6 +592,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"code": 100115, "result": 100115,
                              "message": "验证码错误或已失效", "data": None})
             return
+        # 复刻服务端风控：os 必须是官方固定值 android，否则拒绝登录（100132）。
+        if params.get("os") != "android":
+            self._json(200, {"code": 100132, "result": 100132,
+                             "message": "登录校验未通过", "data": None})
+            return
         self._json(200, {
             "code": 0,
             "result": 0,

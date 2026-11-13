@@ -120,6 +120,10 @@ enum LeapAuthError: LocalizedError {
             return "验证码发送过于频繁，请 60 秒后再试。"
         case 39:
             return "登录凭证已过期，请重新登录。"
+        case 100132:
+            // 服务端未在客户端枚举的码；实测为登录校验被风控/平台参数不符拒绝
+            // （os 必须为固定值 android，APPPlatform 固定 Android）。
+            return "\(stage.failurePrefix)校验未通过（100132）：请稍后重试；若持续出现请先用官方 App 登录一次再试。"
         default:
             // 服务端 message 原文不进用户提示（可能是“操作成功”这类
             // 与失败语境矛盾的文案），只保留业务码；原文由调用方写日志。
