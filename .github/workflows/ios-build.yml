@@ -131,7 +131,12 @@ jobs:
             fi
           fi
           echo "MARKETING_VERSION=$FILE_VERSION" >> "$GITHUB_ENV"
-          echo "version=$FILE_VERSION build=$GITHUB_RUN_NUMBER"
+          # GENERATE_INFOPLIST_FILE=NO 时构建设置不会覆盖 plist 字面值，
+          # 构建号必须直接写进生成出来的 Info.plist，才能与 OTA 清单的 build 对齐。
+          PLIST="$PROJECT_DIR/VehicleControl/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $GITHUB_RUN_NUMBER" "$PLIST"
+          echo "version=$FILE_VERSION build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
 
       # 无签名编译：PR 与每次提交都会跑，作为“代码能不能过编译”的门禁。
       - name: Build for simulator (no signing)

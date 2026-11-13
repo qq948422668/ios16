@@ -775,6 +775,20 @@ def _dispatch_and_watch(slug: str, branch: str) -> int:
         emit("run", "FAIL", "未观测到运行实例（可能被 concurrency 取消，或触发失败）")
         return 2
 
+    # push 与 dispatch 会各触发一次运行，concurrency 策略下较晚的会取消较早的。
+    # 被取消的实例不是失败——改盯同分支最新的活跃/最终实例继续观察。
+    hops = 0
+    while conclusion == "cancelled" and hops < 4:
+        hops += 1
+        emit("run", "INFO", "实例被并发取消，改盯同分支最新实例（第 %d 次）" % hops)
+        time.sleep(POLL_INTERVAL)
+        candidate = _latest_active_run(slug, branch, dispatched_at)
+        if not candidate:
+            break
+        run_id, url = candidate
+        emit("run", "INFO", "#%s 接着观察" % run_id)
+        run_id, conclusion, url = _watch_run(slug, run_id)
+
     emit("run", "INFO", "运行页 %s" % url)
     if conclusion == "success":
         emit("result", "OK", "lint + build 全部通过")
@@ -785,6 +799,47 @@ def _dispatch_and_watch(slug: str, branch: str) -> int:
     emit("result", "FAIL", "结论：%s" % conclusion)
     _dump_errors(slug, run_id)
     return 2
+
+
+def _latest_active_run(slug: str, branch: str, since: float) -> tuple[int, str] | None:
+    """返回 dispatch 之后创建的最新、未被取消的运行实例。"""
+    code, body = api("/repos/%s/actions/runs?branch=%s&per_page=10"
+                     % (slug, urllib.parse.quote(branch)))
+    if code != 200:
+        return None
+    for item in json.loads(body).get("workflow_runs", []):
+        created = item.get("created_at", "")
+        try:
+            created_epoch = datetime.fromisoformat(
+                created.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if created_epoch + 5 < since:
+            continue
+        if item.get("conclusion") == "cancelled":
+            continue
+        return item["id"], item.get("html_url", "")
+    return None
+
+
+def _watch_run(slug: str, run_id: int) -> tuple[int, str, str]:
+    """盯着单个运行实例直到结束。"""
+    deadline = time.time() + POLL_TIMEOUT
+    last_state = ""
+    while time.time() < deadline:
+        code, body = api("/repos/%s/actions/runs/%s" % (slug, run_id))
+        if code != 200:
+            time.sleep(POLL_INTERVAL)
+            continue
+        info = json.loads(body)
+        state = info.get("status", "unknown")
+        if state != last_state:
+            emit("run", "INFO", "状态 %s" % state)
+            last_state = state
+        if state == "completed":
+            return run_id, info.get("conclusion") or "unknown", info.get("html_url", "")
+        time.sleep(POLL_INTERVAL)
+    return run_id, "timeout", ""
 
 
 # ----------------------------------------------------------------------------
