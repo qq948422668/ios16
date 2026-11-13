@@ -74,7 +74,8 @@ jobs:
   build:
     name: Build & Package
     needs: lint
-    runs-on: macos-15
+    # macos-15 池当晚持续"领取后不供给，15 分钟被系统回收"；换 macos-14 池。
+    runs-on: macos-14
     timeout-minutes: 45
     outputs:
       has_ipa: ${{ steps.ipa_check.outputs.has_ipa }}
