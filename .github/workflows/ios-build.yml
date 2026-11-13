@@ -74,8 +74,9 @@ jobs:
   build:
     name: Build & Package
     needs: lint
-    # macos-15 池当晚持续"领取后不供给，15 分钟被系统回收"；换 macos-14 池。
-    runs-on: macos-14
+    # 2026-11-13 晚 macos-14 池秒取消、macos-15 池"领取后不启动"（平台侧故障），
+    # 恢复用 macos-15（run#36 历史成功池）。
+    runs-on: macos-15
     timeout-minutes: 45
     outputs:
       has_ipa: ${{ steps.ipa_check.outputs.has_ipa }}
