@@ -7,11 +7,18 @@ final class APIClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let tokenProvider: any TokenProviding
+    private let signer: GatewaySigner?
     private let log = Logger(subsystem: "com.vehiclecontrol.app", category: "network")
 
-    init(baseURL: URL, tokenProvider: any TokenProviding, session: URLSession? = nil) {
+    init(
+        baseURL: URL,
+        tokenProvider: any TokenProviding,
+        signer: GatewaySigner? = nil,
+        session: URLSession? = nil
+    ) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
+        self.signer = signer
 
         if let session {
             self.session = session
@@ -146,6 +153,24 @@ final class APIClient: @unchecked Sendable {
                 urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             } catch {
                 throw (error as? APIError) ?? APIError.notAuthenticated
+            }
+        }
+
+        // 零跑新网关要求每个业务请求携带 HMAC 签名头（含业务参数参与签名）。
+        if let signer {
+            let token = request.requiresAuth ? (try? await tokenProvider.accessToken()) : nil
+            let signKey = await (tokenProvider as? GatewaySignKeyProviding)?.currentSignKey()
+            var params: [String: String] = [:]
+            for item in request.query {
+                params[item.key] = item.value
+            }
+            let headers = signer.headers(
+                params: params,
+                accessToken: token,
+                signKey: signKey
+            )
+            for (key, value) in headers {
+                urlRequest.setValue(value, forHTTPHeaderField: key)
             }
         }
 

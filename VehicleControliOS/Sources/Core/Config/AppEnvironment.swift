@@ -1,24 +1,16 @@
 import Foundation
 
-/// OAuth 2.0 授权码 + PKCE 所需的全部配置。
-struct OAuthConfiguration: Sendable {
-    let authorizationEndpoint: URL
-    let tokenEndpoint: URL
-    let clientID: String
-    let redirectURI: URL
-    let scopes: [String]
-
-    /// 与 Info.plist 中 CFBundleURLSchemes 必须一致。
-    var redirectScheme: String { redirectURI.scheme ?? "" }
-}
-
-/// 运行环境配置。所有域名、ClientID 均为占位值，
-/// 接入时请替换为你方开放平台下发的真实参数。
+/// 运行环境配置。
+///
+/// 认证已从「网页 OAuth 跳转」改为「官方接口直连」：
+/// 具体域名、签名算法与公共头集中在 `LeapConfiguration` / `AuthService`。
 struct AppEnvironment: Sendable {
     let name: String
+    /// 业务网关（新网关，需 HMAC 签名）。
     let apiBaseURL: URL
     let streamBaseURL: URL
-    let oauth: OAuthConfiguration
+    /// 零跑接入参数（appuser 旧链路 + global-master 新网关）。
+    let leap: LeapConfiguration
     /// 长连接不可用时的兜底轮询间隔（秒）。
     let pollingInterval: TimeInterval
     /// 是否启用 APNs 推送回执。为 false 时指令回执全程走轮询，
@@ -30,15 +22,9 @@ struct AppEnvironment: Sendable {
 
     static let production = AppEnvironment(
         name: "production",
-        apiBaseURL: URL(string: "https://api.example-oem.invalid")!,
-        streamBaseURL: URL(string: "wss://api.example-oem.invalid")!,
-        oauth: OAuthConfiguration(
-            authorizationEndpoint: URL(string: "https://auth.example-oem.invalid/oauth2/authorize")!,
-            tokenEndpoint: URL(string: "https://auth.example-oem.invalid/oauth2/token")!,
-            clientID: "REPLACE_WITH_OFFICIAL_CLIENT_ID",
-            redirectURI: URL(string: "com.vehiclecontrol.app://oauth/callback")!,
-            scopes: ["vehicle.read", "vehicle.control"]
-        ),
+        apiBaseURL: URL(string: "https://app-gw-global-master.leapmotor.com")!,
+        streamBaseURL: URL(string: "wss://app-gw-global-master.leapmotor.com")!,
+        leap: .official,
         pollingInterval: 3,
         pushEnabled: false,
         otaManifestURL: URL(
@@ -56,13 +42,7 @@ struct AppEnvironment: Sendable {
             name: "local-mock",
             apiBaseURL: baseURL,
             streamBaseURL: streamURL,
-            oauth: OAuthConfiguration(
-                authorizationEndpoint: baseURL.appendingPathComponent("oauth2/authorize"),
-                tokenEndpoint: baseURL.appendingPathComponent("oauth2/token"),
-                clientID: "ios-mock-client",
-                redirectURI: URL(string: "com.vehiclecontrol.app://oauth/callback")!,
-                scopes: ["vehicle.read", "vehicle.control"]
-            ),
+            leap: .mock(baseURL: baseURL),
             pollingInterval: 2,
             pushEnabled: false,
             otaManifestURL: baseURL.host.flatMap { host in

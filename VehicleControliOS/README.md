@@ -1,11 +1,58 @@
 # VehicleControl（iOS 16）
 
-车联网远程车控客户端框架：OAuth2 + PKCE 登录、车辆状态实时推送（WebSocket 优先 / 轮询兜底）、
-异步指令下发与回执轮询、Keychain 凭证存储。SwiftUI + async/await，最低 iOS 16。
+车联网远程车控客户端框架：官方账号短信直连登录（零网页）、车辆状态实时推送（WebSocket 优先 /
+轮询兜底）、异步指令下发与回执轮询、Keychain 凭证存储。SwiftUI + async/await，最低 iOS 16。
 
-> **重要前提**：本工程不含任何第三方 App 的逆向接口。`VehicleAPI` 里的 path、`action`
-> 取值、`Vehicle` / `VehicleSnapshot` 字段名都是**待替换的占位契约**。
-> 请依据你方开放平台（或车辆厂官方 API 文档）填写，见文末「接入清单」。
+> **重要前提**：`VehicleAPI` 里的 path、`action` 取值、`Vehicle` / `VehicleSnapshot` 字段名
+> 仍是**待替换的占位契约**；登录链路已按官方协议实现，见 §2「官方账号登录」。
+
+---
+
+## 2. 官方账号登录（接口直连，不加载网页）
+
+登录在应用内直接调用官方接口完成，不再打开 `ASWebAuthenticationSession` 或 WebView。
+主域：`https://appuser.leapmotor.cn`（旧链路）与
+`https://app-gw-global-master.leapmotor.com`（新网关）。
+
+### 2.1 请求序列
+
+| 步骤 | 请求 | 说明 |
+|---|---|---|
+| ① 发送验证码 | `GET {appUserHost}/app-user/applogin/compliance/sendmessagecode?phoneNo={RSA密文}` | 手机号 `RSA/ECB/PKCS1Padding` 加密后 Base64URL 去填充 |
+| ② 短信登录 | `POST {appUserHost}/app-user/applogin/check_login_with_phone?phoneNoCiphertext=…&smsCode=…&deviceID=…&smDeviceId=…&os=ios&pageUrl=…&timespan=…&nonce=…&signStr=…` | 业务参数全在 Query，Body 为空；`signStr = MD5(ASCII升序拼串)[8..<24]` 大写 |
+| ③ 换网关凭证 | `POST {gatewayHost}/base/base-user/account/v1/login`，body `{"identifier","identifierType":"1","security":旧token}` | 未登录态签名 `sign = SHA256(signBase)` |
+| ④ 续期 | `POST {gatewayHost}/base/base-user/token/v1/refresh`，body `{"refreshToken"}` | 已登录态 `sign = HmacSHA256(signKey, signBase)` |
+
+公共头（参与签名）：`acceptLanguage=zh-CN`、`channel=1`、`deviceId`（32 位 hex）、
+`deviceType=ios`、`nonce`、`source=leapmotor`、`timestamp`（毫秒）、`version`，
+签名结果放 `sign`，并附 `x-api-signature-version: 2.0`。
+
+### 2.2 参数与结果解析
+
+- `phoneNo` / `phoneNoCiphertext`：RSA 密文（`LeapCrypto.encryptPhone`）；
+- `smsCode`：6 位数字验证码；`deviceID`：`DeviceIdentity` 持久化的稳定 UUID；
+- ③ 返回 `data.accessToken`（JWT）、`data.refreshToken`、`data.tokenExpireTime`（毫秒）、
+  `data.signParam{r2,r3}`；
+- `signKey[i] = JWT签名段[i] ⊕ base64url(r2)[i] ⊕ base64url(r3)[i]`（取最短长度）。
+
+### 2.3 状态保存与跳转
+
+登录成功后 `TokenPair` 写入 Keychain（双令牌 + signKey + accountId），
+`SessionStore.state = .signedIn`，`RootView` 随状态切换到 `VehicleListView`。
+续期提前 5 分钟触发；401/403 会强制续期一次，续期失败则清除会话回到登录页。
+
+### 2.4 失败提示
+
+| 场景 | 提示 |
+|---|---|
+| 手机号非法 | 请输入 11 位中国大陆手机号 |
+| `code=100115` | 短信验证码错误或已失效，请重新获取 |
+| `code=100117` | 验证码发送过于频繁，请 60 秒后再试（自动进入冷却） |
+| `code=100116` | 手机号格式不正确 |
+| HTTP 401/403 | 登录凭证已失效，请重新登录 |
+| 网络/解析异常 | 网络异常，请检查网络后重试 / 登录响应解析失败 |
+
+Mock 服务已同步实现上述端点：验证码恒为 `123456`，手机号以 `0000` 结尾触发 100117 频控。
 
 ---
 
@@ -66,8 +113,8 @@
 3. **状态一致性**：指令成功后主动 `refresh()` 一次，纠正推送延迟导致的状态滞后。
 4. **错误分层**：`APIError` 区分传输 / 鉴权 / 业务码 / 解码 / 指令失败，UI 只显示
    `userMessage`，日志保留结构信息。
-5. **登录承载**：`ASWebAuthenticationSession` 而非内嵌 WebView（符合 App Store 审核与
-   服务条款），复用系统 SSO Cookie。
+5. **登录承载**：直接调用官方账号接口（手机号 + 短信验证码），不打开网页、
+   不内嵌 WebView；密码类凭据不落盘。
 6. **前后台**：`URLSession` 配 `waitsForConnectivity`；如需后台刷新再补
    `BGAppRefreshTask`（当前仅前台流式刷新）。
 

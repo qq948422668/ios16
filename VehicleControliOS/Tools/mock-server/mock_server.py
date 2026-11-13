@@ -96,6 +96,39 @@ def sha256_b64url(value: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+def b64url_raw(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def fake_gateway_jwt(account_id: str, ttl: int = 21600) -> str:
+    """构造三段式 JWT：客户端要从签名段派生 signKey，段数必须为 3。"""
+    header = b64url_raw(json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8"))
+    payload = b64url_raw(json.dumps(
+        {"sub": account_id, "exp": int(time.time()) + ttl}).encode("utf-8"))
+    signature = b64url_raw(secrets.token_bytes(32))
+    return "%s.%s.%s" % (header, payload, signature)
+
+
+def gateway_session_payload(account_id: str, ttl: int = 21600) -> dict:
+    """新网关登录/续期的统一返回体。"""
+    return {
+        "code": 0,
+        "data": {
+            "accountId": account_id,
+            "accessToken": fake_gateway_jwt(account_id, ttl),
+            "refreshToken": secrets.token_hex(16),
+            "tokenExpireTime": int(time.time() * 1000) + ttl * 1000,
+            "signParam": {
+                "r2": b64url_raw(secrets.token_bytes(32)),
+                "r3": b64url_raw(secrets.token_bytes(32)),
+            },
+        },
+    }
+
+
+MOCK_SMS_CODE = "123456"
+
+
 def ws_text_frame(payload: bytes) -> bytes:
     """服务端 -> 客户端文本帧（不掩码）。"""
     header = bytearray([0x81])
@@ -398,6 +431,10 @@ class Handler(BaseHTTPRequestHandler):
             self._authorize(query)
             return
 
+        if path == "/app-user/applogin/compliance/sendmessagecode":
+            self._send_sms_code(query)
+            return
+
         if path == "/v1/vehicles":
             if self._auth_ok():
                 self._json(200, {"vehicles": list(self.state.vehicles.values())})
@@ -444,6 +481,18 @@ class Handler(BaseHTTPRequestHandler):
             self._token()
             return
 
+        if path == "/app-user/applogin/check_login_with_phone":
+            self._sms_login()
+            return
+
+        if path == "/base/base-user/account/v1/login":
+            self._gateway_login()
+            return
+
+        if path == "/base/base-user/token/v1/refresh":
+            self._gateway_refresh()
+            return
+
         if path == "/v1/push/subscriptions":
             self._read_body()
             if self._auth_ok():
@@ -456,6 +505,70 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._error(404, "not_found", "未知路径 %s" % path)
+
+    # ---- 官方账号登录（appuser 旧链路 + global-master 新网关）
+
+    def _send_sms_code(self, query: dict) -> None:
+        phone = (query.get("phoneNo") or [""])[0]
+        if not phone:
+            self._json(200, {"code": 100116, "result": 100116,
+                             "message": "手机号格式非法", "data": None})
+            return
+        if phone.endswith("0000"):
+            self._json(200, {"code": 100117, "result": 100117,
+                             "message": "验证码发送过于频繁", "data": None})
+            return
+        self._json(200, {"code": 0, "result": 0, "message": "请求成功", "data": None})
+
+    def _sms_login(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        params = {k: (v[0] if v else "")
+                  for k, v in urllib.parse.parse_qs(parsed.query).items()}
+        if not params.get("phoneNoCiphertext"):
+            self._json(200, {"code": 100116, "result": 100116,
+                             "message": "手机号密文缺失", "data": None})
+            return
+        if params.get("smsCode") != MOCK_SMS_CODE:
+            self._json(200, {"code": 100115, "result": 100115,
+                             "message": "验证码错误或已失效", "data": None})
+            return
+        self._json(200, {
+            "code": 0,
+            "result": 0,
+            "message": "请求成功",
+            "data": {
+                "appLoginVO": {
+                    "accountId": "11987654321",
+                    "token": secrets.token_hex(16),
+                    "refreshToken": secrets.token_hex(16),
+                    "tokenExpired": 21600,
+                }
+            },
+        })
+
+    def _gateway_login(self) -> None:
+        raw = self._read_body()
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        security = body.get("security")
+        if not security:
+            self._json(200, {"code": 1001, "message": "缺少 security（旧 token）", "data": None})
+            return
+        account = str(body.get("identifier") or "11987654321")
+        self._json(200, gateway_session_payload(account))
+
+    def _gateway_refresh(self) -> None:
+        raw = self._read_body()
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        if not body.get("refreshToken"):
+            self._json(200, {"code": 401, "message": "refreshToken 无效", "data": None})
+            return
+        self._json(200, gateway_session_payload("11987654321"))
 
     # ---- OAuth
 

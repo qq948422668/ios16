@@ -46,7 +46,13 @@ SDK_TYPES = {
     "NavigationLink", "NavigationStack", "ObservableObject", "ProgressView", "Published",
     "RoundedRectangle", "ScrollView", "Spacer", "State", "StateObject", "SwiftUI", "Text",
     "ToolbarItem", "VStack", "View", "ViewBuilder", "Visibility", "LocalizedStringKey",
-    "Spacer", "EmptyView", "ZStack", "Alert", "Identifiable",
+    "Spacer", "EmptyView", "ZStack", "Alert", "Identifiable", "TextField",
+    # Foundation / 基础类型
+    "Int32", "Int64", "UserDefaults", "Unmanaged", "CFData", "CFError",
+    # Security / CommonCrypto / CryptoKit
+    "Security", "CommonCrypto", "CryptoKit", "SecKey", "SecKeyAlgorithm",
+    "SecKeyCreateEncryptedData", "SecKeyCreateWithData", "SecKeyIsAlgorithmSupported",
+    "CCCrypt", "CCAlgorithm", "CCOperation", "CCOptions", "Insecure", "SymmetricKey",
     # UIKit
     "UIKit", "UIApplication", "UIApplicationDelegate", "UIWindow", "UIWindowScene",
     "UIScreen", "UIResponder", "UIViewController",

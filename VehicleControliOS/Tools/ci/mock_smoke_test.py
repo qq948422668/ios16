@@ -240,6 +240,57 @@ def main() -> int:
         ).decode()
         check("sec-websocket-accept correct", expected.encode() in head)
 
+        # ---- 官方账号登录链路（RSA 手机号 → 短信登录 → 网关凭证交换 → 续期）
+        status, _, body = request(
+            "GET", "/app-user/applogin/compliance/sendmessagecode?phoneNo=MOCKCIPHER")
+        envelope = json.loads(body)
+        check("send sms 200", status == 200, str(status))
+        check("send sms code=0", envelope.get("code") == 0, body[:80])
+
+        status, _, body = request(
+            "GET", "/app-user/applogin/compliance/sendmessagecode?phoneNo=MOCK0000")
+        check("send sms throttle 100117", json.loads(body).get("code") == 100117, body[:80])
+
+        status, _, body = request(
+            "POST", "/app-user/applogin/check_login_with_phone"
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=000000&deviceID=d1&os=ios")
+        check("sms login wrong code 100115", json.loads(body).get("code") == 100115, body[:80])
+
+        status, _, body = request(
+            "POST", "/app-user/applogin/check_login_with_phone"
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=ios")
+        login = json.loads(body)
+        legacy = (login.get("data") or {}).get("appLoginVO") or {}
+        check("sms login ok", login.get("code") == 0 and bool(legacy.get("token")), body[:100])
+
+        status, _, body = request(
+            "POST", "/base/base-user/account/v1/login",
+            body=json.dumps({
+                "identifier": legacy.get("accountId"),
+                "identifierType": "1",
+                "security": legacy.get("token"),
+            }),
+            headers={"Content-Type": "application/json"},
+        )
+        gateway = json.loads(body)
+        data = gateway.get("data") or {}
+        access = data.get("accessToken") or ""
+        check("gateway exchange ok", gateway.get("code") == 0, body[:100])
+        check("gateway jwt has 3 segments", access.count(".") == 2, access[:40])
+        check("gateway carries signParam",
+              bool((data.get("signParam") or {}).get("r2")), body[:120])
+        check("gateway expire is ms", (data.get("tokenExpireTime") or 0) > 10 ** 12)
+
+        status, _, body = request(
+            "POST", "/base/base-user/token/v1/refresh",
+            body=json.dumps({"refreshToken": data.get("refreshToken")}),
+            headers={"Content-Type": "application/json"},
+        )
+        refreshed = json.loads(body)
+        check("gateway refresh ok", refreshed.get("code") == 0, body[:100])
+        check("refresh rotates accessToken",
+              (refreshed.get("data") or {}).get("accessToken") != access)
+
         header = read_exact(sock, 2)
         length = header[1] & 0x7F
         if length == 126:

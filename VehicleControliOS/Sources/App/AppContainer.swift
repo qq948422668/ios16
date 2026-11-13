@@ -23,14 +23,22 @@ final class AppContainer: ObservableObject {
 
         let store = KeychainTokenStore(service: "com.vehiclecontrol.app.oauth")
         let auth = AuthService(env: environment, store: store)
-        let client = APIClient(baseURL: environment.apiBaseURL, tokenProvider: auth)
+        let signer = GatewaySigner(
+            configuration: environment.leap,
+            deviceId: DeviceIdentity.current()
+        )
+        let client = APIClient(
+            baseURL: environment.apiBaseURL,
+            tokenProvider: auth,
+            signer: signer
+        )
         let service = RemoteVehicleService(client: client)
         let cache = SnapshotCache()
 
         self.client = client
         self.tokenStore = store
         self.auth = auth
-        self.session = SessionStore(env: environment, auth: auth)
+        self.session = SessionStore(auth: auth)
         self.vehicleService = service
         self.vehicleStream = HybridVehicleStream(
             client: client,
