@@ -291,6 +291,51 @@ def main() -> int:
         check("refresh rotates accessToken",
               (refreshed.get("data") or {}).get("accessToken") != access)
 
+        # ---- 官方业务接口（车辆列表 / signalMap / 控车下发与轮询）
+        gw_headers = {"Authorization": "Bearer " + (refreshed.get("data") or {}).get("accessToken", "")}
+
+        status, _, body = request("GET", "/app/app-global-service/v1/vehicle/list",
+                                  headers=gw_headers)
+        vehicles = (json.loads(body).get("data") or [])
+        check("official vehicle list ok", status == 200 and len(vehicles) >= 2, body[:120])
+        check("official vehicle list has vin",
+              bool(vehicles and vehicles[0].get("vin")), str(vehicles[:1])[:120])
+
+        status, _, body = request(
+            "POST", "/app/app-signal-service/signal/info/query",
+            body=json.dumps({"vin": vehicles[0]["vin"]}),
+            headers=dict(gw_headers, **{"Content-Type": "application/json"}),
+        )
+        signal_map = ((json.loads(body).get("data") or {}).get("signalMap") or {})
+        check("signalMap returned", status == 200 and bool(signal_map), body[:120])
+        check("signalMap has soc+range",
+              "1204" in signal_map and "3257" in signal_map, str(list(signal_map))[:120])
+
+        control_form = urllib.parse.urlencode({
+            "cmdid": "110",
+            "carvin": vehicles[0]["vin"],
+            "state": json.dumps({"value": "lock"}),
+            "timespan": "1",
+            "nonce": "1",
+            "deviceID": "smoke",
+        })
+        status, _, body = request(
+            "POST", "/app/app-control-service/v3/api/appremotectl", body=control_form,
+            headers=dict(gw_headers,
+                         **{"Content-Type": "application/x-www-form-urlencoded"}),
+        )
+        sent = json.loads(body)
+        msg_id = (sent.get("data") or "")
+        check("remote control accepted", sent.get("result") == 0 and bool(msg_id), body[:120])
+
+        status, _, body = request(
+            "GET", "/app/app-control-service/v3/api/appremotectl/query?msgID=" + str(msg_id),
+            headers=gw_headers,
+        )
+        polled = json.loads(body)
+        check("remote control poll ok",
+              polled.get("result") == 0 and str(polled.get("data")) in ("0", "1"), body[:120])
+
         header = read_exact(sock, 2)
         length = header[1] & 0x7F
         if length == 126:

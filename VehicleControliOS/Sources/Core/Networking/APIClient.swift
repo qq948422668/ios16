@@ -144,7 +144,13 @@ final class APIClient: @unchecked Sendable {
 
         if let body = request.body {
             urlRequest.httpBody = body
-            urlRequest.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            // 控车走 form-urlencoded，其余走 JSON；已显式声明的 Content-Type 不覆盖。
+            if urlRequest.value(forHTTPHeaderField: "Content-Type") == nil {
+                urlRequest.setValue(
+                    "application/json; charset=utf-8",
+                    forHTTPHeaderField: "Content-Type"
+                )
+            }
         }
 
         if request.requiresAuth {
@@ -156,13 +162,19 @@ final class APIClient: @unchecked Sendable {
             }
         }
 
-        // 零跑新网关要求每个业务请求携带 HMAC 签名头（含业务参数参与签名）。
+        // 零跑新网关要求每个业务请求携带 HMAC 签名头（业务参数参与签名）。
         if let signer {
             let token = request.requiresAuth ? (try? await tokenProvider.accessToken()) : nil
             let signKey = await (tokenProvider as? GatewaySignKeyProviding)?.currentSignKey()
             var params: [String: String] = [:]
             for item in request.query {
                 params[item.key] = item.value
+            }
+            // JSON body 与 form body 的业务字段同样参与签名。
+            if let body = request.body {
+                for (key, value) in Self.bodyParameters(body) {
+                    params[key] = value
+                }
             }
             let headers = signer.headers(
                 params: params,
@@ -175,6 +187,38 @@ final class APIClient: @unchecked Sendable {
         }
 
         return urlRequest
+    }
+
+    /// 供控车加密等场景读取当前网关令牌（操作密码 AES 密钥派生需要）。
+    func currentAccessToken() async -> String? {
+        try? await tokenProvider.accessToken()
+    }
+
+    /// 提取请求体中的业务字段用于签名：先按 JSON 对象解析，失败则按表单解析。
+    private static func bodyParameters(_ body: Data) -> [String: String] {
+        if let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            var result: [String: String] = [:]
+            for (key, value) in object {
+                if let string = value as? String {
+                    result[key] = string
+                } else if let number = value as? NSNumber {
+                    result[key] = number.stringValue
+                } else if let bool = value as? Bool {
+                    result[key] = bool ? "true" : "false"
+                }
+            }
+            return result
+        }
+        guard let text = String(data: body, encoding: .utf8) else { return [:] }
+        var result: [String: String] = [:]
+        for pair in text.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let key = parts.first else { continue }
+            let value = parts.count > 1 ? String(parts[1]) : ""
+            result[String(key).removingPercentEncoding ?? String(key)] =
+                value.removingPercentEncoding ?? value
+        }
+        return result
     }
 
     private static func normalize(_ error: Error) -> APIError {

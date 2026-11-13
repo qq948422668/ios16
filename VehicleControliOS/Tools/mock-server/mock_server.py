@@ -129,6 +129,26 @@ def gateway_session_payload(account_id: str, ttl: int = 21600) -> dict:
 MOCK_SMS_CODE = "123456"
 
 
+def _ctl_action(cmdid: str, state: dict) -> tuple[str, dict]:
+    """官方 cmdid + state → Mock 内部动作名（模拟车端执行效果）。"""
+    value = str(state.get("value", "")).lower()
+    if cmdid == "110":
+        return ("lock" if value == "lock" else "unlock"), {}
+    if cmdid == "130":
+        return ("trunk_open" if value == "true" else "trunk_close"), {}
+    if cmdid == "120":
+        return "flash_lights", {}
+    if cmdid == "170":
+        if str(state.get("operate", "")) == "off":
+            return "climate_off", {}
+        return "climate_on", {"target_celsius": str(state.get("temperature", "22"))}
+    if cmdid == "193":
+        return ("charge_start" if value == "start" else "charge_stop"), {}
+    if cmdid == "230":
+        return "window_close", {}
+    return "noop", {}
+
+
 def ws_text_frame(payload: bytes) -> bytes:
     """服务端 -> 客户端文本帧（不掩码）。"""
     header = bytearray([0x81])
@@ -281,6 +301,10 @@ class MockState:
             live["locked"] = False
         elif action == "trunk_toggle":
             live["trunk_open"] = not live["trunk_open"]
+        elif action == "trunk_open":
+            live["trunk_open"] = True
+        elif action == "trunk_close":
+            live["trunk_open"] = False
         elif action == "climate_on":
             live["climate_on"] = True
             try:
@@ -435,6 +459,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send_sms_code(query)
             return
 
+        if path == "/app/app-global-service/v1/vehicle/list":
+            if self._auth_ok():
+                self._vehicle_list()
+            return
+
+        if path == "/app/app-control-service/v3/api/appremotectl/query":
+            if self._auth_ok():
+                self._remote_ctl_query(query)
+            return
+
+        if path == "/app/app-global-service/v1/vehicle/getCarRoute":
+            if self._auth_ok():
+                vin = (query.get("vin") or [""])[0]
+                base = "http://" + (self.headers.get("Host") or "127.0.0.1:8000")
+                self._json(200, {"code": 0, "data": {
+                    "appRegion": base,
+                    "appCenter": base,
+                    "vin": vin,
+                }})
+            return
+
         if path == "/v1/vehicles":
             if self._auth_ok():
                 self._json(200, {"vehicles": list(self.state.vehicles.values())})
@@ -491,6 +536,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/base/base-user/token/v1/refresh":
             self._gateway_refresh()
+            return
+
+        if path == "/app/app-signal-service/signal/info/query":
+            if self._auth_ok():
+                self._signal_query()
+            return
+
+        if path == "/app/app-control-service/v3/api/appremotectl":
+            if self._auth_ok():
+                self._remote_ctl()
             return
 
         if path == "/v1/push/subscriptions":
@@ -557,7 +612,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"code": 1001, "message": "缺少 security（旧 token）", "data": None})
             return
         account = str(body.get("identifier") or "11987654321")
-        self._json(200, gateway_session_payload(account))
+        payload = gateway_session_payload(account)
+        self._register_gateway_tokens(payload["data"])
+        self._json(200, payload)
 
     def _gateway_refresh(self) -> None:
         raw = self._read_body()
@@ -568,7 +625,107 @@ class Handler(BaseHTTPRequestHandler):
         if not body.get("refreshToken"):
             self._json(200, {"code": 401, "message": "refreshToken 无效", "data": None})
             return
-        self._json(200, gateway_session_payload("11987654321"))
+        payload = gateway_session_payload("11987654321")
+        self._register_gateway_tokens(payload["data"])
+        self._json(200, payload)
+
+    def _register_gateway_tokens(self, data: dict) -> None:
+        """把新网关签发的 JWT 登记到令牌表，供业务接口 Bearer 校验。"""
+        access = data.get("accessToken")
+        refresh = data.get("refreshToken")
+        if not access:
+            return
+        with self.state.lock:
+            self.state.access[access] = {
+                "refresh": refresh,
+                "expires_at": time.time() + 21600,
+            }
+
+    # ---- 官方业务接口（车辆 / 车况 / 控车）
+
+    def _vehicle_list(self) -> None:
+        vehicles = []
+        for vehicle in self.state.vehicles.values():
+            vehicles.append({
+                "vin": vehicle["id"],
+                "carType": vehicle.get("model", ""),
+                "licensePlate": "沪A·D" + vehicle["id"][-4:],
+                "vehicleName": vehicle.get("display_name", "我的车辆"),
+                "nickName": vehicle.get("display_name", "")[:2],
+                "isOwner": True,
+                "funcConfig": {
+                    "HVAC": {"temperature": {"min": 16, "max": 32}},
+                    "FRIDGE": {"targetTemp": {"min": -6, "max": 15}},
+                    "WINDOW": {"positions": ["front_left", "front_right"]},
+                },
+            })
+        self._json(200, {"code": 0, "message": "请求成功", "data": vehicles})
+
+    def _signal_map(self, vehicle_id: str) -> dict:
+        live = self.state.live[vehicle_id]
+        charging_map = {"idle": 0, "charging": 1, "complete": 2, "fault": 3}
+        range_km = int(round(live["percent"] * 5.2))
+        return {
+            "1204": str(int(round(live["percent"]))),
+            "100003": "%.1f" % live["percent"],
+            "3257": str(range_km),
+            "3260": str(range_km),
+            "1149": str(charging_map.get(live["charging"], 0)),
+            "1200": "45" if live["charging"] == "charging" else "0",
+            "1318": "12845.6",
+            "1319": "0",
+            "1010": "P",
+            "1944": "0",
+            "1480": "1",
+            "1298": "1" if live["locked"] else "0",
+            "1281": "1" if live["trunk_open"] else "0",
+            "1693": "0", "1694": "0", "1695": "0", "1696": "0",
+            "1938": "1" if live["climate_on"] else "0",
+            "2183": "%.1f" % live["target"],
+            "1349": "%.1f" % live["inside"],
+            "1941": "3",
+            "2100": "0", "2101": "0", "1816": "0",
+            "2646": "2.4", "2653": "2.4", "2660": "2.4", "2667": "2.4",
+            "3724": "120.1551", "3725": "30.2741",
+            "10709": "0", "10707": "4", "10708": "0",
+        }
+
+    def _signal_query(self) -> None:
+        raw = self._read_body()
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            body = {}
+        vin = str(body.get("vin") or "")
+        if vin not in self.state.live:
+            self._json(200, {"code": 404, "message": "车辆不存在", "data": None})
+            return
+        self._json(200, {"code": 0, "data": {"signalMap": self._signal_map(vin)}})
+
+    def _remote_ctl(self) -> None:
+        form = self._form()
+        vin = form.get("carvin", "")
+        if vin not in self.state.live:
+            self._json(200, {"result": 404, "message": "车辆不存在"})
+            return
+        try:
+            state = json.loads(form.get("state") or "{}")
+        except json.JSONDecodeError:
+            state = {}
+        action, parameters = _ctl_action(form.get("cmdid", ""), state)
+        ticket = self.state.create_ticket(vin, action, parameters, "")
+        self._json(200, {"result": 0, "data": ticket["ticket_id"]})
+
+    def _remote_ctl_query(self, query: dict) -> None:
+        msg_id = (query.get("msgID") or [""])[0]
+        ticket = self.state.tickets.get(msg_id)
+        if not ticket:
+            self._json(200, {"result": 404, "message": "指令不存在"})
+            return
+        if time.time() >= ticket["ready_at"]:
+            self._json(200, {"result": 0, "data": "1"})
+        else:
+            self._json(200, {"result": 0, "data": "0"})
 
     # ---- OAuth
 

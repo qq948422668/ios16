@@ -32,7 +32,9 @@ final class AppContainer: ObservableObject {
             tokenProvider: auth,
             signer: signer
         )
-        let service = RemoteVehicleService(client: client)
+        let service = RemoteVehicleService(client: client) {
+            OperatePasswordStore.load()
+        }
         let cache = SnapshotCache()
 
         self.client = client

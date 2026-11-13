@@ -8,6 +8,29 @@
 
 ---
 
+## 1.5 官方接口移植对照表（v1.3.0）
+
+| 能力 | 官方接口 | 代码落点 | 鉴权 |
+|---|---|---|---|
+| 车辆列表 | `GET /app/app-global-service/v1/vehicle/list` | `VehicleAPI.listVehicles` | 网关 HMAC + Bearer |
+| 动态路由 | `GET /app/app-global-service/v1/vehicle/getCarRoute?vin=` | 文档同域，未单独发请求 | 同上 |
+| 实时车况 | `POST /app/app-signal-service/signal/info/query` `{"vin"}` | `VehicleAPI.snapshot` → `VehicleSnapshot(vehicleId:signalMap:)` | 同上 |
+| 控车下发 | `POST /app/app-control-service/v3/api/appremotectl`（form） | `RemoteVehicleService.send` | 网关 HMAC + `oppwd` AES |
+| 控车轮询 | `GET /app/app-control-service/v3/api/appremotectl/query?msgID=` | `VehicleAPI.controlQuery`，首次 1s 后 500ms、上限 24s | 同上 |
+
+signalMap 权威 ID 已按文档 §5.1 全量解码：`1204/100003`（电量）、`3257/3260`（续航）、`1149/1200`
+（充电状态与倒计时）、`1318/1319/1010/1480`（里程/车速/挡位/EPB）、`1298/1281`（门锁/尾门）、
+`1693–1696`（车窗）、`1938/2183/1349/1941`（空调）、`2100/2101/1816`（座椅/方向盘）、
+`2646/2653/2660/2667`（胎压）、`3724/3725`（GCJ-02 坐标）、`10709/10707/10708`（冰箱）。
+
+控车 cmdid 矩阵已落地 14 个入口：`110` 锁/解锁、`130` 尾门开/关、`120` 鸣笛闪灯、
+`170` 空调开关/极速降温/极速升温/前挡除霜、`230` 关窗、`193` 充电 start/finish。
+
+> 操作密码（4 位）仅存 Keychain，控车时按 `AES-128-CBC(md5Short(token[0..32]) / md5Short(token[32..64]))`
+> 加密后作为 `oppwd` 提交，缺失时指令仍会下发，由车端决定是否拒绝。
+
+---
+
 ## 2. 官方账号登录（接口直连，不加载网页）
 
 登录在应用内直接调用官方接口完成，不再打开 `ASWebAuthenticationSession` 或 WebView。

@@ -6,6 +6,9 @@ struct VehicleControlView: View {
     @EnvironmentObject private var container: AppContainer
     @StateObject private var viewModel = VehicleControlViewModel()
     @State private var pendingCommand: VehicleCommand?
+    @State private var showPinEditor = false
+    @State private var pinDraft = ""
+    @State private var hasOperatePin = OperatePasswordStore.load() != nil
 
     private var availableCommands: [VehicleCommand] {
         VehicleCommand.allCases.filter { command in
@@ -18,6 +21,8 @@ struct VehicleControlView: View {
         ScrollView {
             VStack(spacing: 16) {
                 summary
+
+                SignalDashboard(snapshot: viewModel.snapshot)
 
                 if viewModel.phase != .idle {
                     CommandBanner(phase: viewModel.phase) { viewModel.dismissPhase() }
@@ -37,8 +42,33 @@ struct VehicleControlView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                StreamStatusPill(status: viewModel.status)
+                HStack(spacing: 12) {
+                    Button {
+                        pinDraft = ""
+                        showPinEditor = true
+                    } label: {
+                        Image(systemName: hasOperatePin ? "key.fill" : "key")
+                    }
+                    .accessibilityLabel("设置操作密码")
+
+                    StreamStatusPill(status: viewModel.status)
+                }
             }
+        }
+        .alert("操作密码", isPresented: $showPinEditor) {
+            TextField("4 位数字", text: $pinDraft)
+                .keyboardType(.numberPad)
+            Button("保存") {
+                OperatePasswordStore.save(pinDraft)
+                hasOperatePin = OperatePasswordStore.load() != nil
+            }
+            Button("清除", role: .destructive) {
+                OperatePasswordStore.clear()
+                hasOperatePin = false
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("官方控车指令要求携带 4 位操作密码（AES-128-CBC 加密后随指令提交）。密码仅保存在本机 Keychain，不会明文写入日志或配置。")
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.phase)
         .task {

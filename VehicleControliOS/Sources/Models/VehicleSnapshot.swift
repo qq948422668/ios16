@@ -8,6 +8,8 @@ struct VehicleSnapshot: Codable, Sendable, Equatable {
     let climate: ClimateState
     let security: SecurityState
     let location: GeoPoint?
+    /// 官方 signalMap 中超出通用模型的扩展车况（里程/胎压/座椅/冰箱等）。
+    let details: SignalDetails?
 }
 
 struct BatteryState: Codable, Sendable, Equatable {

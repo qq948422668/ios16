@@ -49,6 +49,9 @@ SDK_TYPES = {
     "Spacer", "EmptyView", "ZStack", "Alert", "Identifiable", "TextField",
     # Foundation / 基础类型
     "Int32", "Int64", "UserDefaults", "Unmanaged", "CFData", "CFError",
+    "JSONSerialization", "NSNumber",
+    # SwiftUI 图形
+    "AngularGradient", "LinearGradient", "StrokeStyle",
     # Security / CommonCrypto / CryptoKit
     "Security", "CommonCrypto", "CryptoKit", "SecKey", "SecKeyAlgorithm",
     "SecKeyCreateEncryptedData", "SecKeyCreateWithData", "SecKeyIsAlgorithmSupported",

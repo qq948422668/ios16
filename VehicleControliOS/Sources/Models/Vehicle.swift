@@ -23,6 +23,8 @@ struct VehicleCapability: RawRepresentable, Hashable, Sendable {
     static let flash = VehicleCapability(rawValue: "flash")
     static let horn = VehicleCapability(rawValue: "horn")
     static let charging = VehicleCapability(rawValue: "charging")
+    static let fridge = VehicleCapability(rawValue: "fridge")
+    static let window = VehicleCapability(rawValue: "window")
 }
 
 extension VehicleCapability: Decodable {

@@ -48,16 +48,16 @@ enum LeapCrypto {
         else { return nil }
 
         // SPKI → PKCS#1：定位 BIT STRING（03 81 8D 00 / 03 82 xx xx 00），
-        // 其后 141 字节即 RSAPublicKey SEQUENCE（1024 位模数 + 指数）。
+        // 「未使用位数」字节已包含在标记里，其后 140 字节即 RSAPublicKey SEQUENCE
+        // （1024 位模数 + 指数，共 140 字节，以 30 81 89 开头）。
         let markers = [Data([0x03, 0x81, 0x8D, 0x00]), Data([0x03, 0x82, 0x01, 0x0F, 0x00])]
         guard let marker = markers.first(where: { der.range(of: $0) != nil }),
               let range = der.range(of: marker) else { return nil }
 
-        let keyLength = 141
+        let keyLength = 140
         let start = range.upperBound
-        guard start + keyLength <= der.count else { return nil }
-        // 跳过 BIT STRING 的「未使用位数」字节。
-        let pkcs1 = der.subdata(in: (start + 1)..<(start + keyLength))
+        guard start + keyLength <= der.count, der[start] == 0x30 else { return nil }
+        let pkcs1 = der.subdata(in: start..<(start + keyLength))
 
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
