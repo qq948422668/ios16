@@ -398,9 +398,12 @@ def step_publish() -> int:
         lowered = out.lower()
         network_broken = any(marker in lowered for marker in (
             "connection was reset", "could not resolve host",
-            "failed to connect", "connection timed out"))
+            "failed to connect", "connection timed out",
+            "authentication failed", "terminal prompts disabled"))
         if network_broken:
-            emit("push", "INFO", "git 通道被网络策略阻断，自动降级到 Git Data API 路径")
+            # 认证失败也降级：本环境 git 通道不稳定而 API 通道可用，
+            # 若令牌真失效，API 路径会在 blob/tree 步骤给出明确报错。
+            emit("push", "INFO", "git 通道不可用（网络/认证），自动降级到 Git Data API 路径")
             return _publish_via_api(slug, branch)
         if "already exists" in out or "non-fast-forward" in out or "fetch first" in lowered:
             # 远端有本地没有的提交（例如此前经 API 路径写入的 OTA 清单），

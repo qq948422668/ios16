@@ -1,5 +1,10 @@
 import Foundation
 
+/// 业务成功码集合：`0` 为业务风格成功，`200` 为 HTTP 风格成功
+/// （部分 appuser 端点返回 `{"code":200,"message":"操作成功"}`）。
+/// 泛型类型不支持静态存储属性，放在文件级。
+private let leapSuccessCodes: Set<Int> = [0, 200]
+
 /// 零跑统一响应信封：`{ code, result, message, data }`。
 struct LeapEnvelope<Payload: Decodable>: Decodable {
     let code: Int?
@@ -7,17 +12,13 @@ struct LeapEnvelope<Payload: Decodable>: Decodable {
     let message: String?
     let data: Payload?
 
-    /// 业务成功码集合：`0` 为业务风格成功，`200` 为 HTTP 风格成功
-    /// （部分 appuser 端点返回 `{"code":200,"message":"操作成功"}`）。
-    private static let successCodes: Set<Int> = [0, 200]
-
     var isSuccess: Bool {
         // 双码都缺失视为异常响应，不默认放行。
         let codes = [code, result].compactMap { $0 }
         guard !codes.isEmpty else { return false }
         // allSatisfy：混合风格（code=0, result=200）同样放行，
         // 但任一码是真实失败码（如 100115）仍判失败。
-        return codes.allSatisfy { Self.successCodes.contains($0) }
+        return codes.allSatisfy { leapSuccessCodes.contains($0) }
     }
 }
 
