@@ -33,7 +33,7 @@ on:
 # 同一分支连续提交时取消上一次运行，避免排队浪费额度。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read

@@ -359,9 +359,9 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
     }
 
     /// 业务码失败时的现场证据：只记录码与 message 原文，不含手机号密文与令牌。
-    private static func logBusinessFailure(
+    private static func logBusinessFailure<P: Decodable>(
         _ stage: AuthStage,
-        envelope: LeapEnvelope<some Decodable>,
+        envelope: LeapEnvelope<P>,
         body: Data
     ) {
         Logger(subsystem: "com.vehiclecontrol.app", category: "auth")

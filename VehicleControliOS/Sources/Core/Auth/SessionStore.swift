@@ -75,7 +75,7 @@ final class SessionStore: ObservableObject {
             errorMessage = Self.message(for: error)
             // 频控错误直接进入冷却，避免用户连续点击加剧风控。
             if let authError = error as? LeapAuthError,
-               case .business(_, code: 100117, _) = authError {
+               case .business(_, 100117, _) = authError {
                 startCountdown()
             }
         }
