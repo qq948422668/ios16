@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// iOS 16 兼容的空状态占位（替代 iOS 17 的 ContentUnavailableView）。
+struct EmptyStateView: View {
+    let title: String
+    let systemImage: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+}
+
 /// 行驶统计：总量卡 + 近 7 日柱状图 + 近 6 周能耗与排行（接口 17/18/19）。
 struct DrivingStatsView: View {
     let vehicleId: String
@@ -27,10 +49,10 @@ struct DrivingStatsView: View {
             } else if isLoading {
                 ProgressView("加载行驶数据…")
             } else {
-                ContentUnavailableView(
-                    "暂无数据",
+                EmptyStateView(
+                    title: "暂无数据",
                     systemImage: "chart.bar",
-                    description: Text(error ?? "该车辆暂无行驶记录")
+                    message: error ?? "该车辆暂无行驶记录"
                 )
             }
         }
@@ -162,10 +184,10 @@ struct ParkingPhotoView: View {
             } else if isLoading {
                 ProgressView("正在获取环视照片…")
             } else {
-                ContentUnavailableView(
-                    "暂无照片",
+                EmptyStateView(
+                    title: "暂无照片",
                     systemImage: "camera.on.rectangle",
-                    description: Text(error ?? "车辆尚未上传驻车环视照片")
+                    message: error ?? "车辆尚未上传驻车环视照片"
                 )
             }
         }
