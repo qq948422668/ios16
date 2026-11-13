@@ -130,8 +130,8 @@ enum OwnershipAPI {
         return APIRequest(
             path: "/carownerservice/v3/api/chassis/query",
             query: query,
-            baseOverride: iovBase,
             timeout: 15,
+            baseOverride: iovBase,
             decoder: { data in
                 let envelope = try JSONCoding.decode(ParkingPhotoEnvelope.self, from: data)
                 guard envelope.isSuccess, let info = envelope.data,
@@ -165,8 +165,7 @@ enum OwnershipAPI {
         allowed.insert(charactersIn: "-._~")
         let body = fields
             .sorted { $0.key < $1.key }
-            .map { key -> String in
-                let value = fields[key] ?? ""
+            .map { (key, value) -> String in
                 let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
                 return "\(key)=\(encoded)"
             }
