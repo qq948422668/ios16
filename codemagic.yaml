@@ -1,0 +1,164 @@
+# Codemagic 配置（GitHub Actions 之外的第二条云端 Mac 路径）。
+#
+# 适用场景：GitHub Actions 的 macOS 额度用尽、或需要更快的反馈时，
+# 把同一套命令搬到 Codemagic（免费额度 500 分钟/月）。
+#
+# 用法：
+#   1. Codemagic 后台 Add application → 连接同一仓库
+#   2. 选择 "codemagic.yaml" 作为构建配置
+#   3. 手动 Start new build，或按 triggering 里的分支规则自动触发
+
+workflows:
+  # 纯 Linux 检查：不消耗 Mac 分钟，适合每次 push 都跑
+  ios-static-check:
+    name: iOS static check (Linux, no Mac minutes)
+    instance_type: linux_x2
+    max_build_duration: 10
+    environment:
+      python: 3.12
+      vars:
+        PROJECT_DIR: VehicleControliOS
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: main
+          include: true
+        - pattern: develop
+          include: true
+    scripts:
+      - name: Swift static check
+        script: |
+          cd "$PROJECT_DIR"
+          python3 Tools/ci/swift_static_check.py
+      - name: Mock contract regression
+        script: |
+          cd "$PROJECT_DIR"
+          python3 Tools/ci/mock_smoke_test.py
+
+  # 云端 Mac：编译 + 无签名归档（有签名变量时才会出 IPA）
+  ios-build:
+    name: iOS build (macOS)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      xcode: latest
+      vars:
+        PROJECT_DIR: VehicleControliOS
+        SCHEME: VehicleControl
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+        - pattern: develop
+          include: true
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version
+      - name: Generate Xcode project
+        script: |
+          cd "$PROJECT_DIR"
+          xcodegen generate --spec project.yml
+          ls -d ./*.xcodeproj
+      - name: Build for simulator
+        script: |
+          cd "$PROJECT_DIR"
+          mkdir -p "$CM_BUILD_DIR/logs"
+          set -o pipefail
+          xcodebuild build \
+            -project "$SCHEME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$CM_BUILD_DIR/DD-sim" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$CM_BUILD_DIR/logs/simulator-build.log"
+      - name: Build unsigned device app
+        script: |
+          cd "$PROJECT_DIR"
+          mkdir -p "$CM_BUILD_DIR/logs"
+          set -o pipefail
+          xcodebuild build \
+            -project "$SCHEME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/DD-device" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee "$CM_BUILD_DIR/logs/device-build.log"
+          APP_PATH="$CM_BUILD_DIR/DD-device/Build/Products/Release-iphoneos/$SCHEME.app"
+          test -d "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$CM_BUILD_DIR/$SCHEME-unsigned.zip"
+      - name: Sign and export IPA (optional)
+        script: |
+          # 仅当配置了签名相关环境变量分组时才执行；变量缺失则跳过，不影响无签名产物。
+          if [ -z "${BUILD_CERTIFICATE_BASE64:-}" ]; then
+            echo "未配置签名变量，跳过 IPA 导出（无签名产物仍可用）"
+            exit 0
+          fi
+          cd "$PROJECT_DIR"
+          CERT_PATH="$CM_BUILD_DIR/cert.p12"
+          KEYCHAIN_PATH="$CM_BUILD_DIR/app-signing.keychain-db"
+          printenv BUILD_CERTIFICATE_BASE64 | openssl base64 -d -A -out "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          printenv PROVISIONING_PROFILE_BASE64 | openssl base64 -d -A -out "$PROFILE_DIR/ci.mobileprovision"
+          PROFILE_NAME=$(security cms -D -i "$PROFILE_DIR/ci.mobileprovision" | plutil -extract Name raw -o - -)
+
+          xcodebuild archive \
+            -project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/$SCHEME.xcarchive" \
+            -derivedDataPath "$CM_BUILD_DIR/DD-archive" \
+            -allowProvisioningUpdates \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" MARKETING_VERSION="$VERSION"
+
+          cat > "$CM_BUILD_DIR/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>ad-hoc</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>com.vehiclecontrol.app</key><string>$PROFILE_NAME</string></dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$CM_BUILD_DIR/$SCHEME.xcarchive" \
+            -exportOptionsPlist "$CM_BUILD_DIR/ExportOptions.plist" \
+            -exportPath "$CM_BUILD_DIR/export" \
+            -allowProvisioningUpdates
+    artifacts:
+      - $CM_BUILD_DIR/*.ipa
+      - $CM_BUILD_DIR/*-unsigned.zip
+      - $CM_BUILD_DIR/logs/*.log
+    publishing:
+      email:
+        recipients:
+          - you@example.com
+        notify:
+          success: true
+          failure: true

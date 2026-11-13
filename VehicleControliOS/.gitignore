@@ -1,0 +1,24 @@
+# XcodeGen 生成物，不入库
+*.xcodeproj/
+*.xcworkspace/
+VehicleControl/Info.plist
+
+# 构建产物
+build/
+DerivedData/
+*.ipa
+*.dSYM/
+*.dSYM.zip
+*.xcarchive
+
+# 本机与 IDE
+.DS_Store
+xcuserdata/
+*.xcuserstate
+.vscode/
+.idea/
+
+# 机密
+*.p12
+*.mobileprovision
+ExportOptions.plist

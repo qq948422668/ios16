@@ -1,0 +1,366 @@
+name: iOS Build & Package
+
+# 触发条件：
+# 1. 推送到 main / develop，且改动了 iOS 工程或本工作流；
+# 2. 任意 PR 指向 main / develop（仅做无签名校验，不消耗签名密钥）；
+# 3. 打 v* 标签（归档出的 IPA 会自动挂到 GitHub Release）；
+# 4. 手动触发（Actions 页面 Run workflow，可选导出方式）。
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'VehicleControliOS/**'
+      - '.github/workflows/ios-build.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'VehicleControliOS/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+    inputs:
+      export_method:
+        description: 导出方式（仅在签名密钥可用时生效）
+        type: choice
+        default: ad-hoc
+        options:
+          - development
+          - ad-hoc
+          - app-store
+          - enterprise
+
+# 同一分支连续提交时取消上一次运行，避免排队浪费额度。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 工程所在目录（相对仓库根）。若仓库根就是 VehicleControliOS，改成 "." 即可。
+  PROJECT_DIR: VehicleControliOS
+  SCHEME: VehicleControl
+  BUNDLE_ID: com.vehiclecontrol.app
+
+jobs:
+  # 便宜的 Linux 门禁：符号缺失、协议未实现、scheme 写错这类问题在这里就拦掉，
+  # 不消耗 macOS runner（10 倍计费）。
+  lint:
+    name: Static check & contract test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # 若仓库根就是 VehicleControliOS/，这里改成 "."
+        working-directory: VehicleControliOS
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Swift static check
+        run: python Tools/ci/swift_static_check.py
+
+      - name: Mock contract regression
+        run: python Tools/ci/mock_smoke_test.py
+
+  build:
+    name: Build & Package
+    needs: lint
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      has_ipa: ${{ steps.ipa_check.outputs.has_ipa }}
+    env:
+      # secrets 不能直接写在 step 的 if 里，先落到 job 级 env 再用。
+      HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' }}
+      EXPORT_METHOD: ${{ inputs.export_method || 'ad-hoc' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          # 需要复现构建时改成具体版本，如 "16.4"
+          xcode-version: latest-stable
+
+      - name: Toolchain info
+        run: |
+          set -eo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          sw_vers
+          echo "signing=$HAS_SIGNING export_method=$EXPORT_METHOD"
+
+      - name: Install XcodeGen
+        run: |
+          set -eo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        run: |
+          set -eo pipefail
+          cd "$PROJECT_DIR"
+          xcodegen generate --spec project.yml
+          ls -d ./*.xcodeproj
+
+      - name: Resolve version
+        run: |
+          set -eo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="1.0.0"
+          fi
+          echo "MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION build=$GITHUB_RUN_NUMBER"
+
+      # 无签名编译：PR 与每次提交都会跑，作为“代码能不能过编译”的门禁。
+      - name: Build for simulator (no signing)
+        run: |
+          set -eo pipefail
+          cd "$PROJECT_DIR"
+          mkdir -p "$RUNNER_TEMP/logs"
+          xcodebuild build \
+            -project "$SCHEME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DD-sim" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/logs/simulator-build.log"
+
+      # 无签名真机产物：没有证书时也能拿到可校验的 Release .app。
+      - name: Build unsigned device app
+        run: |
+          set -eo pipefail
+          cd "$PROJECT_DIR"
+          mkdir -p "$RUNNER_TEMP/logs"
+          xcodebuild build \
+            -project "$SCHEME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DD-device" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee "$RUNNER_TEMP/logs/device-build.log"
+
+          APP_PATH="$RUNNER_TEMP/DD-device/Build/Products/Release-iphoneos/$SCHEME.app"
+          test -d "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$RUNNER_TEMP/$SCHEME-unsigned.zip"
+          ls -lh "$RUNNER_TEMP/$SCHEME-unsigned.zip"
+
+          # 标准 IPA 结构：zip 内必须是 Payload/<App>.app。此包未签名，
+          # 不能直接安装，需经 Sideloadly/AltStore 等工具用个人 Apple ID 重签。
+          rm -rf "$RUNNER_TEMP/Payload"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/Payload" \
+            "$RUNNER_TEMP/$SCHEME-unsigned.ipa"
+          rm -rf "$RUNNER_TEMP/Payload"
+          ls -lh "$RUNNER_TEMP/$SCHEME-unsigned.ipa"
+
+      # ---------- 以下是签名链路，仅当配置了证书密钥时执行 ----------
+
+      - name: Install signing certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          CERT_P12_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -eo pipefail
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          # 用 openssl 解码，规避 BSD/GNU base64 参数差异。
+          printenv CERT_P12_BASE64 | openssl base64 -d -A -out "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile
+        if: env.HAS_SIGNING == 'true'
+        env:
+          PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -eo pipefail
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          PROFILE_PATH="$PROFILE_DIR/ci_build.mobileprovision"
+          printenv PROFILE_BASE64 | openssl base64 -d -A -out "$PROFILE_PATH"
+
+          PROFILE_NAME=$(security cms -D -i "$PROFILE_PATH" | plutil -extract Name raw -o - -)
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "provisioning profile: $PROFILE_NAME"
+
+      - name: Archive (Release, signed)
+        if: env.HAS_SIGNING == 'true'
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eo pipefail
+          # development 描述文件配 Apple Development 证书，其余配 Apple Distribution。
+          if [ "$EXPORT_METHOD" = "development" ]; then
+            SIGN_ID="Apple Development"
+          else
+            SIGN_ID="Apple Distribution"
+          fi
+          cd "$PROJECT_DIR"
+          mkdir -p "$RUNNER_TEMP/logs"
+          xcodebuild archive \
+            -project "$SCHEME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/DD-archive" \
+            -allowProvisioningUpdates \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="$SIGN_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            | tee "$RUNNER_TEMP/logs/archive.log"
+
+          ls -d "$RUNNER_TEMP/$SCHEME.xcarchive"
+
+      - name: Export IPA
+        if: env.HAS_SIGNING == 'true'
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eo pipefail
+          if [ "$EXPORT_METHOD" = "development" ]; then
+            SIGN_ID="Apple Development"
+          else
+            SIGN_ID="Apple Distribution"
+          fi
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>${EXPORT_METHOD}</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>${SIGN_ID}</string>
+            <key>destination</key><string>export</string>
+            <key>stripSwiftSymbols</key><true/>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$SCHEME.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            | tee "$RUNNER_TEMP/logs/export.log"
+
+          ls -lh "$RUNNER_TEMP/export"
+
+      - name: Check IPA
+        id: ipa_check
+        if: always()
+        run: |
+          if ls "$RUNNER_TEMP/export"/*.ipa >/dev/null 2>&1; then
+            echo "has_ipa=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ipa=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload signed IPA
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: VehicleControl-ipa-${{ github.run_number }}
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Surface compile errors as annotations
+        # 受限网络下运行日志（zip）可能拿不到；把 error 行写成 workflow annotation，
+        # 走 api.github.com 的 check-runs/annotations 也能取到，闭环不依赖 CDN。
+        if: failure()
+        run: |
+          set +e
+          COUNT=0
+          shopt -s nullglob
+          for log in "$RUNNER_TEMP"/logs/*.log; do
+            while IFS= read -r line; do
+              echo "::error title=${log##*/}::${line}"
+              COUNT=$((COUNT + 1))
+            done < <(grep -hE "error:" "$log" | sed -E 's/^ +//' | sort -u | head -40)
+          done
+          echo "::notice title=annotations::已上报 ${COUNT} 条编译错误"
+
+      - name: Upload unsigned package & logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: VehicleControl-unsigned-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/VehicleControl-unsigned.zip
+            ${{ runner.temp }}/VehicleControl-unsigned.ipa
+            ${{ runner.temp }}/logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## iOS 构建结果"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 触发 | \`$GITHUB_EVENT_NAME\` on \`$GITHUB_REF_NAME\` |"
+            echo "| 版本 | ${MARKETING_VERSION:-n/a} (${GITHUB_RUN_NUMBER}) |"
+            echo "| 签名 | $( [[ "$HAS_SIGNING" == "true" ]] && echo "已签名 / $EXPORT_METHOD" || echo "未签名（缺少 secrets，产物仅供编译校验）" ) |"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Attach IPA to Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && needs.build.outputs.has_ipa == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VehicleControl-ipa-${{ github.run_number }}
+          path: artifacts
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.ipa
+          generate_release_notes: true
+          fail_on_unmatched_files: true
