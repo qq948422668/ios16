@@ -30,10 +30,11 @@ on:
           - app-store
           - enterprise
 
-# 同一分支连续提交时取消上一次运行，避免排队浪费额度。
+# 同分支多次提交时保留全部运行：出包是交付物，取消会丢构建产物
+# （此前 true 曾导致 Build job 被并发取消、拿不到 IPA）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read

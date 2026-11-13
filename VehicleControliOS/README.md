@@ -330,7 +330,7 @@ GitHub Actions `macos-14` runner 可直接跑上面三条命令，证书与描�
 
 每次提交自动打包：推到 `main`/`develop` 即触发（`paths` 过滤避免文档类改动白跑）；
 PR 只跑编译门禁、不消耗签名凭证；打 `v1.2.0` 标签会额外生成 Release 并附 IPA。
-`concurrency` 已开启 `cancel-in-progress`，连续提交只保留最后一次运行。
+`concurrency` 已关闭 `cancel-in-progress`（连续提交保留全部运行，避免出包被取消）。
 
 注意：`macos-15` runner 按 **10 倍**分钟数计费，每次运行约 5–8 分钟（≈50–80 分钟额度），
 私有仓库请留意配额；公开仓库免费。
