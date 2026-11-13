@@ -52,6 +52,11 @@ SDK_TYPES = {
     "JSONSerialization", "NSNumber",
     # SwiftUI 图形
     "AngularGradient", "LinearGradient", "StrokeStyle",
+    # SwiftUI 表单与手势
+    "Section", "Slider", "Toggle", "DatePicker", "MagnificationGesture",
+    "ContentUnavailableView", "Menu", "NavigationStack",
+    # UIKit / Foundation
+    "UIImage", "DateFormatter", "CGFloat",
     # Security / CommonCrypto / CryptoKit
     "Security", "CommonCrypto", "CryptoKit", "SecKey", "SecKeyAlgorithm",
     "SecKeyCreateEncryptedData", "SecKeyCreateWithData", "SecKeyIsAlgorithmSupported",
@@ -80,7 +85,7 @@ SDK_TYPES = {
 IGNORED_IDENTIFIERS = {"Self", "T", "R", "A", "M", "Body"}
 
 DECL_RE = re.compile(
-    r"^\s*(?:@\w+\s+)*(?:public\s+|internal\s+|private\s+|fileprivate\s+|final\s+|open\s+)*"
+    r"^([ \t]*)(?:@\w+(?:\([^)]*\))?\s+)*(?:public\s+|internal\s+|private\s+|fileprivate\s+|final\s+|open\s+)*"
     r"(struct|enum|class|actor|protocol|typealias)\s+([A-Z]\w*)",
     re.MULTILINE,
 )
@@ -117,23 +122,34 @@ def find_block_end(text: str, open_index: int) -> int:
     return -1
 
 
-def collect_declarations(files: dict[Path, str]) -> tuple[dict[str, Path], list[str]]:
+def collect_declarations(
+    files: dict[Path, str]
+) -> tuple[dict[str, Path], list[str], dict[Path, set[str]]]:
+    """返回（顶层声明, 重复项, 每文件嵌套类型集合）。
+
+    嵌套类型（各信封内部的 Payload、Decodable 标准的 CodingKeys 等）
+    跨类型重名合法，不参与重复检查；引用检查只允许同文件内使用。
+    """
     declared: dict[str, Path] = {}
+    nested_by_file: dict[Path, set[str]] = {path: set() for path in files}
     duplicates: list[str] = []
     for path, text in files.items():
         for match in DECL_RE.finditer(text):
-            name = match.group(2)
-            if name in declared and declared[name] != path:
-                duplicates.append(f"{name}: {declared[name].name} 与 {path.name} 重复声明")
+            indent, name = match.group(1), match.group(3)
+            if indent == "":
+                if name in declared and declared[name] != path:
+                    duplicates.append(f"{name}: {declared[name].name} 与 {path.name} 重复声明")
+                else:
+                    declared[name] = path
             else:
-                declared[name] = path
+                nested_by_file[path].add(name)
         # 泛型参数不是类型引用，登记后跳过
         for generic in re.finditer(r"\b(?:struct|enum|class|actor|protocol|func)\s+\w+\s*<([^>]*)>", text):
             for parameter in generic.group(1).split(","):
                 name = parameter.strip().split(":")[0].strip()
                 if name and name[0].isupper():
                     declared.setdefault(name, path)
-    return declared, duplicates
+    return declared, duplicates, nested_by_file
 
 
 def check_balance(path: Path, raw: str) -> list[str]:
@@ -230,7 +246,11 @@ def check_protocol_conformance(files: dict[Path, str], declared: dict[str, Path]
     return problems
 
 
-def check_type_references(files: dict[Path, str], declared: dict[str, Path]) -> list[str]:
+def check_type_references(
+    files: dict[Path, str],
+    declared: dict[str, Path],
+    nested_by_file: dict[Path, set[str]],
+) -> list[str]:
     """粗粒度检查：引用了既非项目声明、也不在白名单的「看起来像类型」的标识符。"""
     known = set(declared) | SDK_TYPES | IGNORED_IDENTIFIERS
     unknown: dict[str, Path] = {}
@@ -241,6 +261,9 @@ def check_type_references(files: dict[Path, str], declared: dict[str, Path]) -> 
         text = re.sub(r"\.\s*[A-Z]\w*", "", text)
         for match in re.finditer(r"(?<![\w.])[A-Z][A-Za-z0-9_]{2,}(?![\w])", text):
             name = match.group(0)
+            # 嵌套类型只在其声明文件内可见
+            if name in nested_by_file.get(path, set()):
+                continue
             if name in known:
                 continue
             # 只保留「类型位置」的用法，降低误报
@@ -390,7 +413,7 @@ def main() -> int:
         print("ERROR: Sources/ 下没有 Swift 文件")
         return 1
 
-    declared, duplicates = collect_declarations(files)
+    declared, duplicates, nested_by_file = collect_declarations(files)
 
     problems: list[str] = []
     for path, text in files.items():
@@ -398,7 +421,7 @@ def main() -> int:
         problems += check_unchecked_usage(path, text)
     problems += duplicates
     problems += check_protocol_conformance(files, declared)
-    problems += check_type_references(files, declared)
+    problems += check_type_references(files, declared, nested_by_file)
     problems += check_build_config()
     problems += check_version_consistency()
     problems += check_app_icon()

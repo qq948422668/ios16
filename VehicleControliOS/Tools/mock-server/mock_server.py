@@ -128,6 +128,11 @@ def gateway_session_payload(account_id: str, ttl: int = 21600) -> dict:
 
 MOCK_SMS_CODE = "123456"
 
+# 8x8 蓝色 PNG（1x1 太容易被当作坏图），base64 解码即字节流。
+CHASSIS_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFElEQVR4nGP8z8Dwn4GBgYGJAQQAOf0E90EZt1AAAAAASUVORK5CYII="
+)
+
 
 def _ctl_action(cmdid: str, state: dict) -> tuple[str, dict]:
     """官方 cmdid + state → Mock 内部动作名（模拟车端执行效果）。"""
@@ -441,6 +446,45 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
+        # ---- 车主服务 GET 端点（接口 12/14/17-19）
+        if path == "/carownerservice/v3/api/healthyCharging/queryPushState":
+            if self._auth_ok():
+                self._json(200, {"code": 0, "data": "1"})
+            return
+
+        if path == "/carownerservice/v3/api/drivingrecord/mileage/energy/detail":
+            if self._auth_ok():
+                self._driving_detail()
+            return
+
+        if path == "/carownerservice/v3/api/drivingrecord/getLastNweeks100kmECAndRank":
+            if self._auth_ok():
+                self._json(200, {"code": 0, "data": {
+                    "weekEc": [
+                        {"week": "W-%d" % i, "ec": 12.5 + i * 0.7}
+                        for i in range(1, 7)
+                    ],
+                    "rankPercent": 23.0,
+                }})
+            return
+
+        if path == "/carownerservice/v3/api/chassis/query":
+            if self._auth_ok():
+                base = "http://" + (self.headers.get("Host") or "127.0.0.1:8000")
+                self._json(200, {"code": 0, "result": 0, "data": {
+                    "fileUrl": base + "/static/chassis-photo.png",
+                    "uploadTime": int(time.time() * 1000) - 3600_000,
+                }})
+            return
+
+        if path == "/static/chassis-photo.png":
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(CHASSIS_PNG)))
+            self.end_headers()
+            self.wfile.write(CHASSIS_PNG)
+            return
+
         if path in ("/", "/healthz"):
             self._json(200, {
                 "status": "ok",
@@ -548,6 +592,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._remote_ctl()
             return
 
+        if path == "/carownerservice/v3/api/appoperate/verifyoperatepwdnew":
+            if self._auth_ok():
+                self._verify_operate_pwd()
+            return
+
+        if path == "/carownerservice/v3/api/healthyCharging/control":
+            if self._auth_ok():
+                self._json(200, {"code": 0, "result": 0, "message": "设置成功"})
+            return
+
         if path == "/v1/push/subscriptions":
             self._read_body()
             if self._auth_ok():
@@ -650,6 +704,34 @@ class Handler(BaseHTTPRequestHandler):
                 "refresh": refresh,
                 "expires_at": time.time() + 21600,
             }
+
+    def _verify_operate_pwd(self) -> None:
+        form = self._form()
+        if not form.get("vin") or not form.get("oprpwd"):
+            self._json(200, {"code": 1001, "message": "vin 或 oprpwd 缺失"})
+            return
+        self._json(200, {"code": 0, "result": 0, "message": "操作密码正确"})
+
+    def _driving_detail(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        params = {k: (v[0] if v else "") for k, v in
+                  urllib.parse.parse_qs(parsed.query).items()}
+        begin = int(params.get("begintime") or 0)
+        # 7 天窗口（毫秒）返回逐日明细；更大窗口只返回总量。
+        if begin and (int(time.time() * 1000) - begin) <= 8 * 86_400_000:
+            self._json(200, {"code": 0, "data": {
+                "totalMileage": 284.6, "totalEnergy": 41.2, "totalFuel": 0,
+                "averageEnergy": 14.5,
+                "detail": [
+                    {"day": "2026-11-%02d" % day, "accumulatedMileage": 12.5 + day * 1.7}
+                    for day in range(7, 14)
+                ],
+            }})
+        else:
+            self._json(200, {"code": 0, "data": {
+                "totalMileage": 12845.6, "totalEnergy": 1820.4, "totalFuel": 0,
+                "averageEnergy": 14.2, "detail": [],
+            }})
 
     # ---- 官方业务接口（车辆 / 车况 / 控车）
 

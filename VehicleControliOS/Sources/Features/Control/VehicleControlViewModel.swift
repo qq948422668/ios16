@@ -18,6 +18,9 @@ final class VehicleControlViewModel: ObservableObject {
         return false
     }
 
+    /// 供附属页面（充电中心/行驶统计/环视照片）定位车辆。
+    var currentVehicleId: String? { vehicleId }
+
     func start(
         vehicle: Vehicle,
         stream: any VehicleStreaming,

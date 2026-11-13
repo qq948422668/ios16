@@ -5,6 +5,18 @@ protocol VehicleServicing: Sendable {
     func fetchSnapshot(vehicleId: String) async throws -> VehicleSnapshot
     func send(_ command: VehicleCommand, to vehicleId: String) async throws -> CommandTicket
     func commandReceipt(vehicleId: String, ticketId: String) async throws -> CommandReceipt
+    /// 接口 6：操作密码前置校验（AES 加密后提交）。
+    func verifyOperatePin(vehicleId: String, pin: String) async throws
+    /// 接口 14：健康充电上限（50~100）。
+    func setChargeLimit(vehicleId: String, targetSoc: Int) async throws
+    /// 接口 14：充电策略推送状态。
+    func chargePushState(vehicleId: String) async throws -> Bool
+    /// 接口 15/16/16.1：原始 cmdid 预约指令（state 为完整 JSON 字符串）。
+    func sendRawCommand(cmdid: String, vehicleId: String, state: String) async throws -> CommandTicket
+    /// 接口 17/18/19：行驶统计聚合。
+    func fetchDrivingStats(vehicleId: String) async throws -> DrivingStats
+    /// 接口 12：驻车环视照片元信息。
+    func fetchParkingPhoto(vehicleId: String) async throws -> ParkingPhotoInfo
 }
 
 extension VehicleServicing {
@@ -85,6 +97,72 @@ final class RemoteVehicleService: VehicleServicing, @unchecked Sendable {
 
     func commandReceipt(vehicleId: String, ticketId: String) async throws -> CommandReceipt {
         try await client.send(VehicleAPI.controlQuery(msgID: ticketId))
+    }
+
+    // MARK: - 车主服务扩展（接口 6 / 12 / 14 / 17-19）
+
+    func verifyOperatePin(vehicleId: String, pin: String) async throws {
+        guard OperatePasswordStore.isValid(pin) else {
+            throw APIError.invalidRequest("操作密码需为 4 位数字")
+        }
+        guard let token = await client.currentAccessToken() else {
+            throw APIError.notAuthenticated
+        }
+        let encrypted = try LeapCrypto.encryptOperationPassword(pin, token: token)
+        _ = try await client.send(
+            OwnershipAPI.verifyOperatePassword(vin: vehicleId, encryptedPin: encrypted)
+        )
+    }
+
+    func setChargeLimit(vehicleId: String, targetSoc: Int) async throws {
+        _ = try await client.send(
+            OwnershipAPI.setChargeLimit(vin: vehicleId, targetSoc: targetSoc)
+        )
+    }
+
+    func chargePushState(vehicleId: String) async throws -> Bool {
+        try await client.send(OwnershipAPI.chargePushState(vin: vehicleId))
+    }
+
+    /// 接口 15（cmdid=190）/ 16（cmdid=161）/ 16.1（cmdid=171）复用控车下发通道。
+    func sendRawCommand(cmdid: String, vehicleId: String, state: String) async throws -> CommandTicket {
+        var form: [String: String] = [
+            "cmdid": cmdid,
+            "carvin": vehicleId,
+            "state": state,
+            "timespan": String(Int64(Date().timeIntervalSince1970 * 1000)),
+            "nonce": String(Int.random(in: 10_000..<10_000_000)),
+            "deviceID": DeviceIdentity.current(),
+        ]
+        if let pin = await operatePin(),
+           OperatePasswordStore.isValid(pin),
+           let token = await client.currentAccessToken() {
+            form["oppwd"] = try LeapCrypto.encryptOperationPassword(pin, token: token)
+        }
+        form["signStr"] = LeapCrypto.md5Short(LeapCrypto.signBase(form))
+        let body = form
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(Self.formEncode($0.value))" }
+            .joined(separator: "&")
+        return try await client.send(VehicleAPI.sendControl(body: Data(body.utf8)))
+    }
+
+    func fetchDrivingStats(vehicleId: String) async throws -> DrivingStats {
+        let endMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let weekAgoMs = endMs - Int64(7 * 86_400_000)
+        async let detail = client.send(
+            OwnershipAPI.drivingDetail(vin: vehicleId, beginMs: weekAgoMs, endMs: endMs)
+        )
+        // 接口 19 失败不阻塞明细展示（排行是增强信息）。
+        async let weekly = try? client.send(OwnershipAPI.weeklyEnergy(carvin: vehicleId))
+        return DrivingStats(
+            detail: try await detail,
+            weekly: await weekly
+        )
+    }
+
+    func fetchParkingPhoto(vehicleId: String) async throws -> ParkingPhotoInfo {
+        try await client.send(OwnershipAPI.parkingPhoto(vin: vehicleId))
     }
 
     private static func formEncode(_ value: String) -> String {

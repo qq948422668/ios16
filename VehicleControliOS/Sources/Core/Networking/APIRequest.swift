@@ -11,6 +11,8 @@ struct APIRequest<Response: Decodable>: Sendable {
     let requiresAuth: Bool
     let timeout: TimeInterval
     let retryPolicy: RetryPolicy
+    /// 个别接口不在主网关（如环视照片在 iov-api），用绝对 base 覆盖。
+    let baseOverride: String?
 
     private let decoderOverride: (@Sendable (Data) throws -> Response)?
 
@@ -23,6 +25,7 @@ struct APIRequest<Response: Decodable>: Sendable {
         requiresAuth: Bool = true,
         timeout: TimeInterval = 20,
         retryPolicy: RetryPolicy = .standard,
+        baseOverride: String? = nil,
         decoder: (@Sendable (Data) throws -> Response)? = nil
     ) {
         self.path = path
@@ -33,6 +36,7 @@ struct APIRequest<Response: Decodable>: Sendable {
         self.requiresAuth = requiresAuth
         self.timeout = timeout
         self.retryPolicy = retryPolicy
+        self.baseOverride = baseOverride
         self.decoderOverride = decoder
     }
 

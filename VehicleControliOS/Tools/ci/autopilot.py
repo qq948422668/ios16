@@ -174,23 +174,31 @@ _OPENER = urllib.request.build_opener(_DropAuthOnRedirect)
 
 
 def api(path: str, method: str = "GET", payload: dict | None = None) -> tuple[int, bytes]:
+    """GitHub API 调用：GET 幂等且本环境网络抖动频繁（读超时/连接重置），
+    统一做 3 次退避重试；非 GET 由调用方按 0 返回值自行决定是否重试。"""
     url = path if path.startswith("http") else API + path
     data = json.dumps(payload).encode() if payload is not None else None
-    request = urllib.request.Request(url, data=data, method=method)
-    request.add_header("Accept", "application/vnd.github+json")
-    request.add_header("X-GitHub-Api-Version", "2022-11-28")
-    request.add_header("User-Agent", "vehiclecontrol-autopilot")
-    if TOKEN:
-        request.add_header("Authorization", "Bearer " + TOKEN)
-    if data:
-        request.add_header("Content-Type", "application/json")
-    try:
-        with _OPENER.open(request, timeout=60) as response:
-            return response.status, response.read()
-    except urllib.error.HTTPError as error:
-        return error.code, error.read()
-    except urllib.error.URLError as error:
-        return 0, str(error.reason).encode()
+    attempts = 3 if method == "GET" else 1
+    last_error: bytes = b"network error"
+    for attempt in range(attempts):
+        request = urllib.request.Request(url, data=data, method=method)
+        request.add_header("Accept", "application/vnd.github+json")
+        request.add_header("X-GitHub-Api-Version", "2022-11-28")
+        request.add_header("User-Agent", "vehiclecontrol-autopilot")
+        if TOKEN:
+            request.add_header("Authorization", "Bearer " + TOKEN)
+        if data:
+            request.add_header("Content-Type", "application/json")
+        try:
+            with _OPENER.open(request, timeout=60) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read()
+        except Exception as error:  # URLError / TimeoutError / ssl 错误
+            last_error = str(error).encode()
+            if attempt + 1 < attempts:
+                time.sleep(2 * (attempt + 1))
+    return 0, last_error
 
 
 # ----------------------------------------------------------------------------

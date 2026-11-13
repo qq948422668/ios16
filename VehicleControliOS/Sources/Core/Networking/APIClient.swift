@@ -118,8 +118,9 @@ final class APIClient: @unchecked Sendable {
             ? String(request.path.dropFirst())
             : request.path
 
+        let base = request.baseOverride.flatMap(URL.init(string:)) ?? baseURL
         guard var components = URLComponents(
-            url: baseURL.appendingPathComponent(relativePath),
+            url: base.appendingPathComponent(relativePath),
             resolvingAgainstBaseURL: false
         ) else {
             throw APIError.invalidRequest("无效路径 \(request.path)")

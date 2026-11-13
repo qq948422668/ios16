@@ -9,6 +9,13 @@ struct VehicleControlView: View {
     @State private var showPinEditor = false
     @State private var pinDraft = ""
     @State private var hasOperatePin = OperatePasswordStore.load() != nil
+    @State private var ownershipSheet: OwnershipSheet?
+
+    /// 车主服务附属页面。
+    enum OwnershipSheet: String, Identifiable {
+        case charging, stats, parking
+        var id: String { rawValue }
+    }
 
     private var availableCommands: [VehicleCommand] {
         VehicleCommand.allCases.filter { command in
@@ -43,6 +50,27 @@ struct VehicleControlView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
+                    Menu {
+                        Button {
+                            ownershipSheet = .charging
+                        } label: {
+                            Label("充电中心", systemImage: "bolt.batteryblock")
+                        }
+                        Button {
+                            ownershipSheet = .stats
+                        } label: {
+                            Label("行驶统计", systemImage: "chart.bar")
+                        }
+                        Button {
+                            ownershipSheet = .parking
+                        } label: {
+                            Label("驻车环视", systemImage: "camera.on.rectangle")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("更多车主服务")
+
                     Button {
                         pinDraft = ""
                         showPinEditor = true
@@ -52,6 +80,27 @@ struct VehicleControlView: View {
                     .accessibilityLabel("设置操作密码")
 
                     StreamStatusPill(status: viewModel.status)
+                }
+            }
+        }
+        .sheet(item: $ownershipSheet) { sheet in
+            NavigationStack {
+                switch sheet {
+                case .charging:
+                    ChargingCenterView(
+                        vehicleId: viewModel.currentVehicleId ?? "",
+                        service: container.vehicleService
+                    )
+                case .stats:
+                    DrivingStatsView(
+                        vehicleId: viewModel.currentVehicleId ?? "",
+                        service: container.vehicleService
+                    )
+                case .parking:
+                    ParkingPhotoView(
+                        vehicleId: viewModel.currentVehicleId ?? "",
+                        service: container.vehicleService
+                    )
                 }
             }
         }

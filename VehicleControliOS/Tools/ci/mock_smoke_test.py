@@ -350,6 +350,50 @@ def main() -> int:
         check("remote control poll ok",
               polled.get("result") == 0 and str(polled.get("data")) in ("0", "1"), body[:120])
 
+        # ---- 车主服务（接口 6/12/14/17-19）
+        status, _, body = request(
+            "POST", "/carownerservice/v3/api/appoperate/verifyoperatepwdnew",
+            body="vin=LP1&oprpwd=CIPHER", headers=dict(
+                gw_headers, **{"Content-Type": "application/x-www-form-urlencoded"}))
+        verify = json.loads(body)
+        check("operate pwd verify ok", verify.get("code") == 0, body[:80])
+
+        status, _, body = request(
+            "POST", "/carownerservice/v3/api/healthyCharging/control",
+            body="vin=LP1&carvin=LP1&state=1&targetSoc=80", headers=dict(
+                gw_headers, **{"Content-Type": "application/x-www-form-urlencoded"}))
+        check("charge limit accepted", json.loads(body).get("code") == 0, body[:80])
+
+        status, _, body = request(
+            "GET", "/carownerservice/v3/api/healthyCharging/queryPushState?vin=LP1&carvin=LP1",
+            headers=gw_headers)
+        check("charge push state ok", json.loads(body).get("data") == "1", body[:80])
+
+        status, _, body = request(
+            "GET", "/carownerservice/v3/api/drivingrecord/mileage/energy/detail"
+                   "?begintime=%d&endtime=%d&vin=LP1" % (
+                       int(time.time() * 1000) - 7 * 86_400_000, int(time.time() * 1000)),
+            headers=gw_headers)
+        driving = (json.loads(body).get("data") or {})
+        check("driving detail ok",
+              bool(driving.get("detail")) and bool(driving.get("totalMileage")), body[:120])
+
+        status, _, body = request(
+            "GET", "/carownerservice/v3/api/drivingrecord/getLastNweeks100kmECAndRank?carvin=LP1",
+            headers=gw_headers)
+        weekly = (json.loads(body).get("data") or {})
+        check("weekly energy ok",
+              len(weekly.get("weekEc") or []) == 6 and "rankPercent" in weekly, body[:120])
+
+        status, _, body = request(
+            "GET", "/carownerservice/v3/api/chassis/query?vin=LP1&timespan=1&nonce=1"
+                   "&deviceID=smoke&signStr=1", headers=gw_headers)
+        photo = (json.loads(body).get("data") or {})
+        check("parking photo meta ok", bool(photo.get("fileUrl")), body[:120])
+        status, _, body = request("GET", "/static/chassis-photo.png")
+        check("parking photo download ok",
+              status == 200 and body[:4] == b"\x89PNG", "bytes=%d" % len(body))
+
         header = read_exact(sock, 2)
         length = header[1] & 0x7F
         if length == 126:
