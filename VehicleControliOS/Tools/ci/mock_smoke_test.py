@@ -248,6 +248,13 @@ def main() -> int:
         check("send sms code=0", envelope.get("code") == 0, body[:80])
 
         status, _, body = request(
+            "GET", "/app-user/applogin/compliance/sendmessagecode"
+                   "?phoneNo=MOCKCIPHER&bizStyle=http")
+        http_style = json.loads(body)
+        check("send sms http-style code=200",
+              http_style.get("code") == 200 and http_style.get("result") == 0, body[:80])
+
+        status, _, body = request(
             "GET", "/app-user/applogin/compliance/sendmessagecode?phoneNo=MOCK0000")
         check("send sms throttle 100117", json.loads(body).get("code") == 100117, body[:80])
 

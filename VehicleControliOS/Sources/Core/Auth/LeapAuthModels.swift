@@ -7,8 +7,17 @@ struct LeapEnvelope<Payload: Decodable>: Decodable {
     let message: String?
     let data: Payload?
 
+    /// 业务成功码集合：`0` 为业务风格成功，`200` 为 HTTP 风格成功
+    /// （部分 appuser 端点返回 `{"code":200,"message":"操作成功"}`）。
+    private static let successCodes: Set<Int> = [0, 200]
+
     var isSuccess: Bool {
-        (code ?? 0) == 0 && (result ?? 0) == 0
+        // 双码都缺失视为异常响应，不默认放行。
+        let codes = [code, result].compactMap { $0 }
+        guard !codes.isEmpty else { return false }
+        // allSatisfy：混合风格（code=0, result=200）同样放行，
+        // 但任一码是真实失败码（如 100115）仍判失败。
+        return codes.allSatisfy { Self.successCodes.contains($0) }
     }
 }
 
@@ -45,11 +54,26 @@ struct LeapSessionSummary: Sendable, Equatable {
     let accessTokenExpiresAt: Date
 }
 
+/// 登录链路阶段：决定错误文案的前缀，避免“发码失败”被说成“登录失败”。
+enum AuthStage: String, Sendable {
+    case sendCode
+    case signIn
+    case refresh
+
+    var failurePrefix: String {
+        switch self {
+        case .sendCode: return "验证码发送失败"
+        case .signIn: return "登录失败"
+        case .refresh: return "登录状态刷新失败"
+        }
+    }
+}
+
 /// 登录/续期错误：把业务码翻译成用户可读文案。
 enum LeapAuthError: LocalizedError {
     case invalidPhone
     case invalidSmsCode
-    case business(code: Int, message: String?)
+    case business(stage: AuthStage, code: Int, message: String?)
     case http(status: Int, body: String)
     case transport(String)
     case decoding(String)
@@ -62,8 +86,8 @@ enum LeapAuthError: LocalizedError {
             return "请输入 11 位中国大陆手机号。"
         case .invalidSmsCode:
             return "请输入 6 位数字验证码。"
-        case .business(let code, let message):
-            return Self.businessMessage(code: code, fallback: message)
+        case .business(let stage, let code, let message):
+            return Self.businessMessage(stage: stage, code: code, fallback: message)
         case .http(let status, let body):
             if status == 401 || status == 403 {
                 return "登录凭证已失效，请重新登录。"
@@ -81,7 +105,11 @@ enum LeapAuthError: LocalizedError {
         }
     }
 
-    private static func businessMessage(code: Int, fallback: String?) -> String {
+    private static func businessMessage(
+        stage: AuthStage,
+        code: Int,
+        fallback: String?
+    ) -> String {
         switch code {
         case 100115:
             return "短信验证码错误或已失效，请重新获取。"
@@ -92,10 +120,9 @@ enum LeapAuthError: LocalizedError {
         case 39:
             return "登录凭证已过期，请重新登录。"
         default:
-            if let fallback, !fallback.isEmpty {
-                return "登录失败（\(code)）：\(fallback)"
-            }
-            return "登录失败（业务码 \(code)）。"
+            // 服务端 message 原文不进用户提示（可能是“操作成功”这类
+            // 与失败语境矛盾的文案），只保留业务码；原文由调用方写日志。
+            return "\(stage.failurePrefix)（业务码 \(code)）。"
         }
     }
 

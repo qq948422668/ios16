@@ -711,10 +711,19 @@ def _publish_via_api(slug: str, branch: str) -> int:
             payload = {"content": content.decode("utf-8"), "encoding": "utf-8"}
         except UnicodeDecodeError:
             payload = {"content": base64.b64encode(content).decode(), "encoding": "base64"}
-        detail, response = api("/repos/%s/git/blobs" % slug, "POST", payload)
+        # GitHub blob API 偶发返回 400「malformed request」（实测同一请求
+        # 重放 1~3 次后必 201），属于突发请求触发的瞬时抖动：
+        # 5 次指数退避重试 + 上传间隔节流，blob 重复创建是幂等的。
+        detail = response = None
+        for attempt in range(5):
+            detail, response = api("/repos/%s/git/blobs" % slug, "POST", payload)
+            if detail == 201:
+                break
+            time.sleep(min(3 * (2 ** attempt), 30))
         if detail != 201:
-            emit("api", "FAIL", "blob 失败 %s HTTP %s" % (rel, detail))
+            emit("api", "FAIL", "blob 失败 %s HTTP %s（已重试 5 次）" % (rel, detail))
             return 2
+        time.sleep(0.4)
         entries.append({"path": rel, "mode": "100644", "type": "blob",
                         "sha": json.loads(response)["sha"]})
     emit("api", "OK", "blob 全部创建完成")

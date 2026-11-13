@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// 官方账号认证中心（短信验证码直连，不经网页）。
 ///
@@ -48,7 +49,12 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
         try Self.validateHTTP(response, data: data)
         let envelope = try Self.decode(LeapEnvelope<LeapEmptyPayload>.self, from: data)
         guard envelope.isSuccess else {
-            throw LeapAuthError.business(code: envelope.code ?? -1, message: envelope.message)
+            Self.logBusinessFailure(.sendCode, envelope: envelope, body: data)
+            throw LeapAuthError.business(
+                stage: .sendCode,
+                code: envelope.code ?? envelope.result ?? -1,
+                message: envelope.message
+            )
         }
     }
 
@@ -111,7 +117,12 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
         try Self.validateHTTP(response, data: data)
         let envelope = try Self.decode(LeapEnvelope<AppLoginPayload>.self, from: data)
         guard envelope.isSuccess else {
-            throw LeapAuthError.business(code: envelope.code ?? -1, message: envelope.message)
+            Self.logBusinessFailure(.signIn, envelope: envelope, body: data)
+            throw LeapAuthError.business(
+                stage: .signIn,
+                code: envelope.code ?? envelope.result ?? -1,
+                message: envelope.message
+            )
         }
         guard let payload = envelope.data?.appLoginVO else {
             throw LeapAuthError.missingTokens("data.appLoginVO")
@@ -155,7 +166,12 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
 
         let envelope = try Self.decode(LeapEnvelope<GatewayLoginPayload>.self, from: data)
         guard envelope.isSuccess else {
-            throw LeapAuthError.business(code: envelope.code ?? -1, message: envelope.message)
+            Self.logBusinessFailure(.signIn, envelope: envelope, body: data)
+            throw LeapAuthError.business(
+                stage: .signIn,
+                code: envelope.code ?? envelope.result ?? -1,
+                message: envelope.message
+            )
         }
         guard let payload = envelope.data,
               let accessToken = payload.accessToken, !accessToken.isEmpty else {
@@ -262,7 +278,12 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
             if envelope.code == 401 || envelope.code == 403 {
                 store.clear()
             }
-            throw LeapAuthError.business(code: envelope.code ?? -1, message: envelope.message)
+            Self.logBusinessFailure(.refresh, envelope: envelope, body: data)
+            throw LeapAuthError.business(
+                stage: .refresh,
+                code: envelope.code ?? envelope.result ?? -1,
+                message: envelope.message
+            )
         }
         guard let payload = envelope.data,
               let accessToken = payload.accessToken, !accessToken.isEmpty else {
@@ -335,6 +356,16 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
         } catch {
             throw LeapAuthError.transport(error.localizedDescription)
         }
+    }
+
+    /// 业务码失败时的现场证据：只记录码与 message 原文，不含手机号密文与令牌。
+    private static func logBusinessFailure(
+        _ stage: AuthStage,
+        envelope: LeapEnvelope<some Decodable>,
+        body: Data
+    ) {
+        Logger(subsystem: "com.vehiclecontrol.app", category: "auth")
+            .error("业务失败 [\(stage.rawValue, privacy: .public)] code=\(envelope.code.map(String.init) ?? "nil", privacy: .public) result=\(envelope.result.map(String.init) ?? "nil", privacy: .public) message=\(envelope.message ?? "nil", privacy: .public) body=\(String(data: body.prefix(200), encoding: .utf8) ?? "non-utf8", privacy: .public)")
     }
 
     private static func validateHTTP(_ response: URLResponse, data: Data) throws {

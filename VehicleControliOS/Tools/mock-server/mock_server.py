@@ -573,6 +573,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"code": 100117, "result": 100117,
                              "message": "验证码发送过于频繁", "data": None})
             return
+        # bizStyle=http：模拟部分端点的 HTTP 风格成功码 {"code":200}
+        if (query.get("bizStyle") or [""])[0] == "http":
+            self._json(200, {"code": 200, "result": 0,
+                             "message": "操作成功", "data": None})
+            return
         self._json(200, {"code": 0, "result": 0, "message": "请求成功", "data": None})
 
     def _sms_login(self) -> None:
