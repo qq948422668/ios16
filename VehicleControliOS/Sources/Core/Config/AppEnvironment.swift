@@ -65,7 +65,7 @@ struct AppEnvironment: Sendable {
             ),
             pollingInterval: 2,
             pushEnabled: false,
-            otaManifestURL: baseURL.host.map { host in
+            otaManifestURL: baseURL.host.flatMap { host in
                 URL(string: "http://\(host):8000/ota/manifest.json")
             }
         )
