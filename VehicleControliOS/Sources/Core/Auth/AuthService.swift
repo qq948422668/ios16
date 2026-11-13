@@ -17,11 +17,19 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
     private let store: any TokenStoring
     private let session: URLSession
     private var inFlightRefresh: Task<TokenPair, Error>?
+    /// 数美设备风控指纹（smDeviceId）采集器，登录前调用；可替换实现。
+    private let smDeviceIdProvider: any SmDeviceIdProviding
 
-    init(env: AppEnvironment, store: any TokenStoring, session: URLSession = .shared) {
+    init(
+        env: AppEnvironment,
+        store: any TokenStoring,
+        session: URLSession = .shared,
+        smDeviceIdProvider: any SmDeviceIdProviding = DeviceFingerprintSampler()
+    ) {
         self.env = env
         self.store = store
         self.session = session
+        self.smDeviceIdProvider = smDeviceIdProvider
     }
 
     // MARK: - 登录第一步：发送验证码
@@ -67,7 +75,17 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
         }
 
         let cipher = try LeapCrypto.encryptPhone(phone)
-        let legacy = try await appLogin(phoneCiphertext: cipher, smsCode: smsCode)
+        // 调用时机：登录请求组装前采集数美设备风控指纹（内部含超时与降级，不阻塞主链路）。
+        let fingerprint = await smDeviceIdProvider.collect()
+        if fingerprint.source == .degraded {
+            Logger(subsystem: "com.vehiclecontrol.app", category: "auth")
+                .notice("smDeviceId 采样失败/超时，已降级为稳定设备标识（风控拒绝时将以 100132 反馈）")
+        }
+        let legacy = try await appLogin(
+            phoneCiphertext: cipher,
+            smsCode: smsCode,
+            smDeviceId: fingerprint.value
+        )
         let pair = try await exchangeGateway(legacy: legacy, phone: phone)
         try store.save(pair)
 
@@ -78,15 +96,20 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
     }
 
     /// 旧版短信登录（Query 传参 + MD5 截断签名）。
+    ///
+    /// `smDeviceId` 承载方式：作为 Query 参数参与 `signBase` 签名
+    /// （接口 2 必传，取值来自 `SmDeviceIdProviding`，降级时为稳定设备标识）。
     private func appLogin(
         phoneCiphertext: String,
-        smsCode: String
+        smsCode: String,
+        smDeviceId: String
     ) async throws -> AppLoginVO {
         var params: [String: String] = [
             "phoneNoCiphertext": phoneCiphertext,
             "smsCode": smsCode,
             "deviceID": DeviceIdentity.current(),
-            "smDeviceId": DeviceIdentity.current(),
+            // 数美设备风控指纹（采集逻辑见 SmDeviceFingerprint.swift）。
+            "smDeviceId": smDeviceId,
             // 文档 §3 接口 2：os 固定值 "android"，服务端校验非 android 直接拒绝。
             "os": "android",
             "pageUrl": "",
@@ -378,7 +401,7 @@ actor AuthService: TokenProviding, GatewaySignKeyProviding {
             let value = params[key] ?? ""
             let sample: String
             switch key {
-            case "phoneNoCiphertext", "smsCode", "signStr":
+            case "phoneNoCiphertext", "smsCode", "signStr", "smDeviceId":
                 sample = value.count > 8
                     ? "\(value.prefix(4))***\(value.suffix(2)) len=\(value.count)"
                     : "*** len=\(value.count)"

@@ -266,13 +266,30 @@ def main() -> int:
         # 风控复刻：os 非 android 必须被拒绝（100132 触发条件回归）。
         status, _, body = request(
             "POST", "/app-user/applogin/check_login_with_phone"
-                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=ios")
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=ios"
+                    "&smDeviceId=64HEX")
         check("sms login os=ios rejected 100132",
+              json.loads(body).get("code") == 100132, body[:80])
+
+        # 数美指纹缺失必须被拒绝（100132：smDeviceId 为空/缺失）。
+        status, _, body = request(
+            "POST", "/app-user/applogin/check_login_with_phone"
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=android")
+        check("sms login missing smDeviceId rejected 100132",
+              json.loads(body).get("code") == 100132, body[:80])
+
+        # 数美指纹被风控标记的设备必须被拒绝（100132：风控拒绝模拟）。
+        status, _, body = request(
+            "POST", "/app-user/applogin/check_login_with_phone"
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=android"
+                    "&smDeviceId=RISKREJECTED")
+        check("sms login risk-flagged rejected 100132",
               json.loads(body).get("code") == 100132, body[:80])
 
         status, _, body = request(
             "POST", "/app-user/applogin/check_login_with_phone"
-                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=android")
+                    "?phoneNoCiphertext=MOCKCIPHER&smsCode=123456&deviceID=d1&os=android"
+                    "&smDeviceId=%s" % ("a" * 64))
         login = json.loads(body)
         legacy = (login.get("data") or {}).get("appLoginVO") or {}
         check("sms login ok", login.get("code") == 0 and bool(legacy.get("token")), body[:100])

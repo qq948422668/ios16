@@ -57,6 +57,8 @@ SDK_TYPES = {
     "ContentUnavailableView", "Menu", "NavigationStack",
     # UIKit / Foundation
     "UIImage", "DateFormatter", "CGFloat",
+    "UIDevice", "ProcessInfo", "Locale", "TimeZone", "Calendar",
+    "UserDefaults", "UUID", "URLSession", "HTTPURLResponse", "URLResponse",
     # Security / CommonCrypto / CryptoKit
     "Security", "CommonCrypto", "CryptoKit", "SecKey", "SecKeyAlgorithm",
     "SecKeyCreateEncryptedData", "SecKeyCreateWithData", "SecKeyIsAlgorithmSupported",

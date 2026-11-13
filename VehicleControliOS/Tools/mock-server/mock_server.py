@@ -651,6 +651,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"code": 100132, "result": 100132,
                              "message": "登录校验未通过", "data": None})
             return
+        # 复刻数美指纹校验：smDeviceId 缺失/为空/被标记为风控拒绝设备 → 100132。
+        sm_device_id = params.get("smDeviceId") or ""
+        if not sm_device_id or sm_device_id.startswith("RISK"):
+            self._json(200, {"code": 100132, "result": 100132,
+                             "message": "设备风控校验未通过", "data": None})
+            return
         self._json(200, {
             "code": 0,
             "result": 0,
